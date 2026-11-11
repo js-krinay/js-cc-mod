@@ -32,7 +32,7 @@ test('the heat grid starts on Monday, has 24 hours, and steps cells by share of 
 })
 
 test('a timeline mark spans from its start to its end across the shared track', () => {
-  const ev = (t: number, d: number | null) => ({ s: 'a', t, d, model: 'm', sub: false, agent: 'main', cost: 0, hit: 0.5, ctx: 0 })
+  const ev = (t: number, d: number | null) => ({ uid: String(t), s: 'a', t, d, model: 'm', sub: false, agent: 'main', cost: 0, hit: 0.5, ctx: 0 })
   const { start, end, marks } = timelineLayout([ev(1000, 1000), ev(3000, 500), ev(2000, null)])
   expect([start, end]).toEqual([0, 3000])
   expect(marks[0]).toMatchObject({ left: 0, width: (1000 / 3000) * 100 })

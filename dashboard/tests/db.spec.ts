@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import pricesFile from '../prices.json'
 import { PricesFile } from '../src/schemas'
 import { Database } from 'bun:sqlite'
-import { COLUMNS, exportRows, ingest, insertRows, open, priceKey, SORTS, summary, syncPeer, table, TABLES, type Query } from '../src/db'
+import { COLUMNS, exportRows, ingest, insertRows, open, priceKey, requestDetail, SORTS, summary, syncPeer, table, TABLES, type Query } from '../src/db'
 
 const prices = PricesFile.parse(pricesFile)
 const dirs: string[] = []
@@ -419,6 +419,61 @@ describe('right now and the period before', () => {
     expect(s.prev).toMatchObject({ since: T0 - 48 * H, until: T0 - 24 * H, requests: 3 })
     expect(s.prev.cost).toBeCloseTo(3 * prices.models['claude-opus-5-5']![0])
     expect(summary(db, q({ since: T0 - 24 * H, until: T0, filters: { machine: 'mac' } }), T0).prev.requests).toBe(2)
+  })
+})
+
+describe('request detail', () => {
+  const at = (min: number) => new Date(T0 + min * 60_000).toISOString()
+  const seed = async () => {
+    const { d, db } = setup()
+    writeFileSync(join(d, '2026-11-12.jsonl'), [
+      line({ sessionId: 's', turnId: 't1', endedAt: at(0), durationMs: 60_000, tools: ['Read', 'Bash'], serverTools: ['web_search'],
+        messageCount: 12, engineVersion: '2.1.311', cwd: '/w/shop', inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 600, outputTokens: 40 }),
+      line({ sessionId: 's', turnId: 'x9', agentId: 'a1', agentType: 'Explore', agentDescription: 'Find the cart', endedAt: at(2), durationMs: 30_000 }),
+      line({ sessionId: 's', turnId: 't1', endedAt: at(3), durationMs: 1_000 }),
+      line({ sessionId: 's', turnId: 't2', endedAt: at(20), durationMs: 1_000 }), // the next prompt
+      line({ sessionId: 'other', turnId: 't1', endedAt: at(1) }), // same turn id, another session
+    ].join(''))
+    await ingest(db, d, 'mac', prices.models)
+    return db
+  }
+  const uidOf = (db: ReturnType<typeof open>, min: number) =>
+    table(db, q(), 'recent', 1, 50).rows.find(r => r.ended_at === T0 + min * 60_000 && r.session_id === 's')!.uid
+
+  test('a request comes back with everything the log holds, its project and its cost by token type', async () => {
+    const db = await seed()
+    const d = requestDetail(db, uidOf(db, 0), '1h')!
+    expect(d.request).toMatchObject({
+      sessionId: 's', turnId: 't1', machine: 'mac', project: 'shop', cwd: '/w/shop', messageCount: 12, engineVersion: '2.1.311',
+      toolNames: ['Read', 'Bash'], serverTools: ['web_search'], startedAt: T0 - 60_000, inputTokens: 100, outputTokens: 40,
+    })
+    const opus = prices.models['claude-opus-5-5']!
+    expect(d.request.costs.cacheWrite).toBeCloseTo((600 * opus[2]) / 1e6)
+    expect(d.request.cost).toBeCloseTo((100 * opus[0] + 600 * opus[2] + 300 * opus[3] + 40 * opus[4]) / 1e6)
+    expect(d.request.hit).toBeCloseTo(0.3)
+    expect(requestDetail(db, 'no-such-request', '1h')).toBeNull()
+  })
+
+  test('its prompt lists every request the prompt set off, subagents included, and nothing from elsewhere', async () => {
+    const db = await seed()
+    for (const min of [0, 2, 3]) {
+      const p = requestDetail(db, uidOf(db, min), '1h')!.prompt!
+      expect(p.key).toBe('t1')
+      expect(p.requests.map(r => r.endedAt)).toEqual([T0, T0 + 2 * 60_000, T0 + 3 * 60_000])
+      expect(p.requests.filter(r => r.sub).map(r => r.agent)).toEqual(['Explore'])
+      expect(p.totals.requests).toBe(3)
+    }
+    expect(requestDetail(db, uidOf(db, 20), '1h')!.prompt!.requests).toHaveLength(1)
+  })
+
+  test('the new fields travel to a peer', async () => {
+    const peer = setup(), me = setup()
+    writeFileSync(join(peer.d, '2026-11-12.jsonl'), line({ tools: ['Edit'], messageCount: 3, engineVersion: '2.1.0' }))
+    await ingest(peer.db, peer.d, 'server', prices.models)
+    const fake = (async () => Response.json(exportRows(peer.db, 0, 100))) as unknown as typeof fetch
+    await syncPeer(me.db, 'https://server', prices.models, fake)
+    const uid = table(me.db, q(), 'recent', 1, 5).rows[0]!.uid
+    expect(requestDetail(me.db, uid, '1h')!.request).toMatchObject({ toolNames: ['Edit'], messageCount: 3, engineVersion: '2.1.0' })
   })
 })
 

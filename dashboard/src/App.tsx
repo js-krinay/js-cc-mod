@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts'
 import type { AgentShare, ChartRow, CostTypeRow, Group, HeatCell, Now, Page, Pauses, PromptRow, RecentRow, SessionRow, Sort, TableName, TimelineEvent, TimelineSession, Totals } from './db'
 import { span } from '@/lib/insights'
+import { RequestDrawer } from './RequestDrawer'
 import { CostByType, CostOfPauses, HourHeatmap, PerSession, SessionTimeline, ShareBars } from './Insights'
 import logo from './favicon.svg'
 import { Button } from '@/components/ui/button'
@@ -102,11 +103,11 @@ function Heads<T>({ cols, paged }: { cols: Col[]; paged: ReturnType<typeof usePa
         <TableHead key={c.label} className={c.right ? 'text-right' : ''}
           aria-sort={on ? (paged.sort!.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
           {c.key === undefined ? c.label : (
-            <button type="button" disabled={paged.busy} onClick={() => paged.sortBy(c.key!, c.text ?? false)}
-              className={`inline-flex items-center gap-1 rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring ${on ? 'text-foreground' : ''} ${c.right ? 'flex-row-reverse' : ''}`}
+            <Button variant="ghost" size="sm" disabled={paged.busy} onClick={() => paged.sortBy(c.key!, c.text ?? false)}
+              className={`-mx-2 h-7 gap-1 px-2 font-medium ${on ? 'text-foreground' : 'text-muted-foreground'} ${c.right ? 'flex-row-reverse' : ''}`}
               aria-label={`Sort by ${c.label}`}>
               {c.label}<Icon className={`size-3.5 shrink-0 ${on ? '' : 'opacity-40'}`} aria-hidden />
-            </button>
+            </Button>
           )}
         </TableHead>
       )
@@ -145,6 +146,7 @@ export function App() {
   const [loading, setLoading] = useState(false)
   const [auto, setAuto] = useState(true)
   const [search, setSearch] = useState(view.q ?? '')
+  const [detail, setDetail] = useState<string | null>(null)
 
   const update = useCallback((next: Partial<View> | ((v: View) => View)) => {
     setView(v => {
@@ -305,7 +307,7 @@ export function App() {
           <Section id="sessions" title="Sessions" aside={<Figures items={[
             ['Sessions', fmt(data.kpis.sessions)], ['Prompt read from cache', pct(cacheShare(data.kpis))],
           ]} />}>
-            <SessionTimeline sessions={data.timeline.sessions} events={data.timeline.events} order={data.modelOrder} onPick={t => setFilter('session', t)} />
+            <SessionTimeline sessions={data.timeline.sessions} events={data.timeline.events} order={data.modelOrder} onPick={t => setFilter('session', t)} onOpen={setDetail} />
             <PerSession sessions={data.timeline.sessions} events={data.timeline.events} onPick={t => setFilter('session', t)} />
             <Prompts first={data.tables.prompts} query={query} sorts={view.sorts} onSort={onSort} onPick={t => setFilter('session', t)} />
             <Sessions first={data.tables.sessions} query={query} sorts={view.sorts} onSort={onSort} onPick={s => setFilter('session', s.title ?? s.k)} />
@@ -327,8 +329,9 @@ export function App() {
           </Section>
 
           <Section id="requests" title="Every request">
-            <Recent first={data.tables.recent} query={query} sorts={view.sorts} onSort={onSort} order={data.modelOrder} />
+            <Recent first={data.tables.recent} query={query} sorts={view.sorts} onSort={onSort} order={data.modelOrder} onOpen={setDetail} />
           </Section>
+          <RequestDrawer uid={detail} ttl={view.ttl} order={data.modelOrder} onOpen={setDetail} onClose={() => setDetail(null)} />
         </>
       )}
     </div>
@@ -614,14 +617,14 @@ function Prompts({ first, query, sorts, onSort, onPick }: {
   )
 }
 
-function Recent({ first, query, sorts, onSort, order }: {
-  first: Page<RecentRow>; query: string; sorts: View['sorts']; onSort: (n: TableName, s: Sort) => void; order: string[]
+function Recent({ first, query, sorts, onSort, order, onOpen }: {
+  first: Page<RecentRow>; query: string; sorts: View['sorts']; onSort: (n: TableName, s: Sort) => void; order: string[]; onOpen: (uid: string) => void
 }) {
   const paged = usePaged('recent', first, query, sorts.recent, onSort)
   const rows = paged.page.rows
   return (
     <Card>
-      <CardHeader><CardTitle>Requests</CardTitle><CardDescription>Newest first. Click a column to sort.</CardDescription></CardHeader>
+      <CardHeader><CardTitle>Requests</CardTitle><CardDescription>Newest first. Click a request for everything logged about it, a column to sort.</CardDescription></CardHeader>
       <CardContent>
         <Table>
           <Heads paged={paged} cols={[
@@ -632,8 +635,8 @@ function Recent({ first, query, sorts, onSort, order }: {
             { label: 'Outcome', key: 'outcome', text: true },
           ]} />
           <TableBody>
-            {rows.map((r, i) => (
-              <TableRow key={i}>
+            {rows.map(r => (
+              <Pickable key={r.uid} onPick={() => onOpen(r.uid)}>
                 <TableCell>{new Date(r.ended_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</TableCell>
                 <TableCell><div className="max-w-[260px] truncate">{r.session_title ?? r.session_id}</div></TableCell>
                 <TableCell><div className="max-w-[260px] truncate">{r.agent_id ? `${r.agent_type ?? 'subagent'}: ${r.agent_description ?? ''}` : 'main'}</div></TableCell>
@@ -644,7 +647,7 @@ function Recent({ first, query, sorts, onSort, order }: {
                 <TableCell className="text-right tabular-nums">{r.cost == null ? 'unpriced' : usd(r.cost)}</TableCell>
                 <TableCell className="text-right tabular-nums">{ms(r.duration_ms)}</TableCell>
                 <TableCell>{r.outcome}</TableCell>
-              </TableRow>
+              </Pickable>
             ))}
           </TableBody>
         </Table>

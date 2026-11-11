@@ -137,7 +137,7 @@ export const usd = (v: unknown) => {
   const n = num(v)
   if (n == null) return '—'
   return n >= 100 ? `$${Math.round(n).toLocaleString()}` : n >= 1 ? `$${n.toFixed(2)}` : n >= 0.01 ? `$${n.toFixed(3)}`
-    : n > 0 ? `$${n.toFixed(4)}` : '$0'
+    : n >= 0.0001 ? `$${n.toFixed(4)}` : n > 0 ? '<$0.0001' : '$0'
 }
 export const ms = (v: unknown) => {
   const n = num(v)
@@ -172,3 +172,10 @@ export function comparison(now: { cost: number; requests: number }, before: { co
     ? `Compared with ${label}, cost and requests are about the same.`
     : `Compared with ${label}, cost is ${cost} and requests are ${requests}.`
 }
+
+// The API's stop reason, in words; an unknown one has its underscores dropped.
+const OUTCOMES: Record<string, string> = {
+  end_turn: 'finished', tool_use: 'asked for tools', max_tokens: 'hit the output limit', stop_sequence: 'stopped at a stop sequence',
+  pause_turn: 'paused', refusal: 'refused', model_context_window_exceeded: 'ran out of context',
+}
+export const outcomeLabel = (reason: string | null | undefined) => (reason ? OUTCOMES[reason] ?? reason.replace(/_/g, ' ') : 'no response')

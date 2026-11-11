@@ -11,6 +11,13 @@ export const clamped = (min: number, max: number, fallback: number) =>
   z.coerce.number().int().catch(fallback).transform(n => Math.max(min, Math.min(max, n)))
 const str = z.string().max(10_000).nullable().catch(null)
 
+// A list of tool names, stored as JSON text: from a log line it is an array,
+// from a peer the text this index wrote. Anything else is null.
+const nameList = z.array(z.string().max(200)).max(500)
+const names = z.union([nameList, z.string().max(200_000).transform((s, ctx) => {
+  try { return JSON.parse(s) as unknown } catch { ctx.addIssue({ code: 'custom', message: 'not JSON' }); return z.NEVER }
+}).pipe(nameList)]).transform(a => JSON.stringify(a)).nullable().catch(null)
+
 // One request as the mod logs it. A peer cannot put markup where a count
 // goes: every field is held to its type here.
 export const LogRow = z.object({
@@ -39,6 +46,10 @@ export const LogRow = z.object({
   cacheWriteTokens: num,
   // The mod logs the tool names; the index keeps how many there were.
   tools: z.union([z.array(z.unknown()).transform(a => a.length), z.number()]).nullable().catch(null),
+  toolNames: names,
+  serverTools: names,
+  messageCount: num,
+  engineVersion: z.string().max(100).nullable().catch(null),
   error: str,
 })
 export type LogRow = z.infer<typeof LogRow>
@@ -73,6 +84,12 @@ export const QueryParams = z.object({
   sort: z.string().max(40).optional().catch(undefined),
   dir: z.enum(['asc', 'desc']).catch('desc'),
   ...Object.fromEntries(FACET_KEYS.map(k => [k, facet])) as Record<(typeof FACET_KEYS)[number], typeof facet>,
+})
+
+// The query string of /api/request: one request by its index id.
+export const RequestParams = z.object({
+  uid: z.string().min(1).max(1000),
+  ttl: z.enum(['1h', '5m']).catch('1h'),
 })
 
 // The query string of /api/export, which a peer's sync calls.

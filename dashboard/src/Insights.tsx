@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts'
 import type { AgentShare, CostTypeRow, HeatCell, Pauses, TimelineEvent, TimelineSession } from './db'
+import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
+import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { COST_TYPES, type CostType, costTypeRows, heatGrid, span, sparkPath, ticks, timelineLayout } from '@/lib/insights'
 import { fmt, ms, OTHER, seriesColor, sessionName, TOP_SERIES, usd } from '@/lib/view'
@@ -135,8 +137,8 @@ export function ShareBars({ id, title, description, what, rows, onPick }: {
           <ul className="flex flex-col gap-1">
             {rows.map(a => (
               <li key={a.k}>
-                <button type="button" onClick={() => onPick(a.k)} aria-label={`Filter by ${what} ${a.k}`}
-                  className="grid w-full grid-cols-[minmax(6rem,12rem)_1fr_auto] items-center gap-3 rounded-md px-1 py-1 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
+                <Button variant="ghost" onClick={() => onPick(a.k)} aria-label={`Filter by ${what} ${a.k}`}
+                  className="grid h-auto w-full grid-cols-[minmax(6rem,12rem)_1fr_auto] items-center gap-3 px-1 py-1 text-left font-normal">
                   <span className="truncate" title={a.k}>{a.k}</span>
                   <span className="h-3 rounded-r-[4px] bg-[var(--series-1)]" style={{ width: `${top > 0 ? Math.max(0.5, (a.cost / top) * 100) : 0}%` }} />
                   <span className="grid grid-cols-[4.5rem_3rem_7rem] text-right tabular-nums">
@@ -144,7 +146,7 @@ export function ShareBars({ id, title, description, what, rows, onPick }: {
                     <span className="text-muted-foreground">{pct(total > 0 ? a.cost / total : null)}</span>
                     <span className="text-muted-foreground">{fmt(a.requests)} {a.requests === 1 ? 'request' : 'requests'}</span>
                   </span>
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
@@ -180,30 +182,28 @@ export function CostOfPauses({ pauses, ttl, writeCost, onPick }: {
           {writeCost > 0 && <>, <span className="font-semibold">{pct(pauses.cost / writeCost)}</span> of all cache-write cost</>}.
         </p>}
         {pauses.top.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-sm">
-              <caption className="pb-2 text-left text-[13px] text-muted-foreground">The costliest pauses</caption>
-              <thead className="text-left text-[13px] text-muted-foreground">
-                <tr><th className="pb-1 font-normal">When</th><th className="pb-1 font-normal">Session</th><th className="pb-1 font-normal">Thread</th>
-                  <th className="pb-1 text-right font-normal">Idle for</th><th className="pb-1 text-right font-normal">Written again</th><th className="pb-1 text-right font-normal">Cost</th></tr>
-              </thead>
-              <tbody>
-                {pauses.top.map(x => (
-                  <tr key={`${x.session}${x.at}`} className="border-t border-border">
-                    <td className="py-1.5 pr-3 whitespace-nowrap">{when(x.at)}</td>
-                    <td className="max-w-[18rem] py-1.5 pr-3">
-                      <button type="button" className="max-w-full truncate text-left hover:underline focus-visible:outline-2 focus-visible:outline-ring"
-                        onClick={() => onPick(x.title ?? x.session)} title={sessionName(x.title, x.session)}>{sessionName(x.title, x.session)}</button>
-                    </td>
-                    <td className="py-1.5 pr-3">{x.agent}</td>
-                    <td className="py-1.5 pr-3 text-right tabular-nums">{span(x.gapMs)}</td>
-                    <td className="py-1.5 pr-3 text-right tabular-nums">{fmt(x.tokens)} tokens</td>
-                    <td className="py-1.5 text-right tabular-nums">{x.cost == null ? 'unpriced' : usd(x.cost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table className="min-w-[560px]">
+            <TableCaption className="mt-0 mb-2 caption-top text-left text-[13px]">The costliest pauses</TableCaption>
+            <TableHeader>
+              <TableRow><TableHead>When</TableHead><TableHead>Session</TableHead><TableHead>Thread</TableHead>
+                <TableHead className="text-right">Idle for</TableHead><TableHead className="text-right">Written again</TableHead><TableHead className="text-right">Cost</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {pauses.top.map(x => (
+                <TableRow key={`${x.session}${x.at}`}>
+                  <TableCell className="whitespace-nowrap">{when(x.at)}</TableCell>
+                  <TableCell className="max-w-[18rem]">
+                    <Button variant="link" className="block h-auto max-w-full truncate p-0 text-left font-normal text-foreground"
+                      onClick={() => onPick(x.title ?? x.session)} title={sessionName(x.title, x.session)}>{sessionName(x.title, x.session)}</Button>
+                  </TableCell>
+                  <TableCell>{x.agent}</TableCell>
+                  <TableCell className="text-right tabular-nums">{span(x.gapMs)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmt(x.tokens)} tokens</TableCell>
+                  <TableCell className="text-right tabular-nums">{x.cost == null ? 'unpriced' : usd(x.cost)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </CardContent>
     </Card>
@@ -212,8 +212,8 @@ export function CostOfPauses({ pauses, ttl, writeCost, onPick }: {
 
 // What each recent session looked like: one row per session on a shared time
 // axis, the main thread above its subagents, each request as wide as it ran.
-export function SessionTimeline({ sessions, events, order, onPick }: {
-  sessions: TimelineSession[]; events: TimelineEvent[]; order: string[]; onPick: (title: string) => void
+export function SessionTimeline({ sessions, events, order, onPick, onOpen }: {
+  sessions: TimelineSession[]; events: TimelineEvent[]; order: string[]; onPick: (title: string) => void; onOpen: (uid: string) => void
 }) {
   const [hover, setHover] = useState<string | null>(null)
   const { start, end, marks } = useMemo(() => timelineLayout(events), [events])
@@ -252,17 +252,17 @@ export function SessionTimeline({ sessions, events, order, onPick }: {
                 </div>
                 {sessions.map(s => (
                   <div key={s.id} className="flex items-stretch border-t border-border py-1.5">
-                    <button type="button" onClick={() => onPick(s.title ?? s.id)} title={sessionName(s.title, s.id)}
-                      className="w-[13rem] shrink-0 truncate pr-3 text-left text-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring">
+                    <Button variant="ghost" onClick={() => onPick(s.title ?? s.id)} title={sessionName(s.title, s.id)}
+                      className="block h-auto w-[13rem] shrink-0 truncate px-1 py-0.5 text-left font-normal">
                       <span className="block truncate">{sessionName(s.title, s.id)}</span>
                       <span className="block truncate text-xs text-muted-foreground">{fmt(s.requests)} requests, {usd(s.cost)}, {pct(s.hit)} cached</span>
-                    </button>
+                    </Button>
                     <div className="relative flex-1">
                       {[false, true].map(sub => (
                         <div key={String(sub)} className={`absolute inset-x-0 h-[45%] ${sub ? 'bottom-0' : 'top-0'} rounded-sm bg-muted/50`}>
                           {(bySession.get(s.id) ?? []).filter(e => e.sub === sub).map((e, i) => (
-                            <span key={i} onMouseEnter={() => setHover(describe(e))} data-mark
-                              className="absolute inset-y-0 rounded-[2px] ring-1 ring-card hover:ring-foreground"
+                            <span key={i} onMouseEnter={() => setHover(describe(e))} onClick={() => onOpen(e.uid)} data-mark
+                              className="absolute inset-y-0 cursor-pointer rounded-[2px] ring-1 ring-card hover:ring-foreground"
                               style={{ left: `${e.left}%`, width: `max(3px, ${e.width}%)`, background: seriesColor(e.model, order) }} />
                           ))}
                         </div>
@@ -273,7 +273,7 @@ export function SessionTimeline({ sessions, events, order, onPick }: {
               </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-              <span role="status" className="tabular-nums">{hover ?? 'Hover a request for its details.'}</span>
+              <span role="status" className="tabular-nums">{hover ?? 'Hover a request to read it; click it for everything logged about it.'}</span>
               <span className="flex flex-wrap gap-3" aria-label="Legend">
                 {models.map(m => (
                   <span key={m} className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-[3px]" style={{ background: seriesColor(m, order) }} />{m}</span>
@@ -328,8 +328,8 @@ export function PerSession({ sessions, events, onPick }: { sessions: TimelineSes
               const top = Math.max(0, ...pts.map(p => p.ctx))
               const line = metric === 'hit' ? sparkPath(pts, W, H) : sparkPath(pts.map(p => ({ t: p.t, hit: p.ctx / peak })), W, H)
               return (
-                <button key={s.id} type="button" onClick={() => onPick(s.title ?? s.id)}
-                  className="rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring">
+                <Button key={s.id} variant="outline" onClick={() => onPick(s.title ?? s.id)}
+                  className="block h-auto rounded-lg p-3 text-left font-normal whitespace-normal">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="truncate text-sm">{sessionName(s.title, s.id)}</span>
                     <span className="shrink-0 text-lg font-semibold tabular-nums">{metric === 'hit' ? pct(s.hit) : fmt(top)}</span>
@@ -345,7 +345,7 @@ export function PerSession({ sessions, events, onPick }: { sessions: TimelineSes
                     <span>{fmt(pts.length)} {metric === 'ctx' ? 'main-thread ' : ''}requests</span>
                     <span>{metric === 'hit' ? (low ? `${fmt(low)} under 50%` : 'none under 50%') : `peak ${fmt(top)} tokens`}</span>
                   </div>
-                </button>
+                </Button>
               )
             })}
           </div>

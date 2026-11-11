@@ -22,6 +22,7 @@ export const COLUMNS = [
   'ended_at', 'duration_ms', 'first_chunk_ms', 'machine', 'user', 'session_id', 'session_title', 'cwd', 'branch',
   'source', 'turn_id', 'step', 'agent_id', 'agent_type', 'agent_description', 'model', 'model_answered', 'effort',
   'stop_reason', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'tools', 'error',
+  'tool_names', 'server_tools', 'message_count', 'engine_version',
 ] as const
 type Column = (typeof COLUMNS)[number]
 
@@ -33,6 +34,7 @@ const FIELD = {
   model: 'model', model_answered: 'modelAnswered', effort: 'effort', stop_reason: 'stopReason',
   input_tokens: 'inputTokens', output_tokens: 'outputTokens', cache_read_tokens: 'cacheReadTokens',
   cache_write_tokens: 'cacheWriteTokens', tools: 'tools', error: 'error',
+  tool_names: 'toolNames', server_tools: 'serverTools', message_count: 'messageCount', engine_version: 'engineVersion',
 } as const satisfies Record<Column, keyof LogRow & keyof typeof requests.$inferInsert>
 
 // The price-table key for a model id as the API reports it: a date suffix,
@@ -149,7 +151,8 @@ export async function ingest(db: Db, logDir: string, machine: string, models: Re
         continue
       }
       if (!o || typeof o !== 'object' || Array.isArray(o)) { skipped++; continue }
-      rows.push({ uid: `${machine}:${name}:${at}`, cells: COLUMNS.map(c => o[FIELD[c]]) })
+      // A line's `tools` holds the names: the index keeps their count and the names.
+      rows.push({ uid: `${machine}:${name}:${at}`, cells: COLUMNS.map(c => (c === 'tool_names' ? o.tools : o[FIELD[c]])) })
     }
     added += insertRows(db, LOCAL, rows, models)
     db.insert(files).values({ name, offset: offset + end + 1 })
@@ -302,7 +305,7 @@ export type Totals = {
 export type Group = Totals & { k: string; p50: number | null; p95: number | null }
 export type SessionRow = Totals & { k: string; title: string | null; machine: string | null; branch: string | null }
 export type RecentRow = {
-  ended_at: number; duration_ms: number | null; machine: string | null; session_id: string | null
+  uid: string; ended_at: number; duration_ms: number | null; machine: string | null; session_id: string | null
   session_title: string | null; agent_id: string | null; agent_type: string | null; agent_description: string | null
   model: string; effort: string | null; outcome: string; output_tokens: number | null; input_all: number; cost: number | null
 }
@@ -321,7 +324,7 @@ export type PromptRow = {
 export type TimelineSession = { id: string; title: string | null; machine: string | null; requests: number; cost: number; hit: number | null; last: number }
 // One request on the timeline: s session, t end (ms), d duration (ms), sub a subagent's request.
 export type TimelineEvent = {
-  s: string; t: number; d: number | null; model: string; sub: boolean; agent: string; cost: number | null; hit: number | null
+  uid: string; s: string; t: number; d: number | null; model: string; sub: boolean; agent: string; cost: number | null; hit: number | null
   ctx: number // prompt size: input plus cache read and write tokens
 }
 
@@ -394,7 +397,7 @@ export function table<N extends TableName>(db: Db, q: Query, name: N, page = 1, 
   if (name === 'recent') {
     const total = db.select({ n: count() }).from(r).leftJoin(p, PRICED).where(w).get()!.n
     const rows = db.select({
-      ended_at: sql<number>`${r.endedAt}`, duration_ms: r.durationMs, machine: r.machine, session_id: r.sessionId,
+      uid: r.uid, ended_at: sql<number>`${r.endedAt}`, duration_ms: r.durationMs, machine: r.machine, session_id: r.sessionId,
       session_title: r.sessionTitle, agent_id: r.agentId, agent_type: r.agentType, agent_description: r.agentDescription,
       model: FACETS.model, effort: r.effort, outcome: FACETS.stop, output_tokens: r.outputTokens,
       input_all: num(sql`${z(r.inputTokens)} + ${z(r.cacheReadTokens)} + ${z(r.cacheWriteTokens)}`),
@@ -464,6 +467,69 @@ export function table<N extends TableName>(db: Db, q: Query, name: N, page = 1, 
   }
   return { rows: paged as TableRow[N][], total, page, size }
 }
+
+// One request in full, for the detail drawer: every field the log holds, its
+// cost by token type, and the prompt it belongs to with that prompt's other
+// requests. Null when no such request is indexed.
+const listOf = (json: string | null) => { try { return json ? (JSON.parse(json) as string[]) : [] } catch { return [] } }
+
+export type PromptMember = {
+  uid: string; startedAt: number; endedAt: number; durationMs: number | null; sub: boolean; agent: string
+  model: string; effort: string | null; cost: number | null; output: number | null; ctx: number; stopReason: string | null
+}
+
+export function requestDetail(db: Db, uid: string, ttl: Query['ttl']) {
+  const c = cost(ttl)
+  const sent = sql`${z(r.inputTokens)} + ${z(r.cacheReadTokens)} + ${z(r.cacheWriteTokens)}`
+  const row = db.select({
+    uid: r.uid, origin: r.origin, endedAt: sql<number>`${r.endedAt}`, startedAt: sql<number>`${r.endedAt} - coalesce(${r.durationMs}, 0)`,
+    durationMs: r.durationMs, firstChunkMs: r.firstChunkMs, machine: r.machine, user: r.user, sessionId: r.sessionId,
+    sessionTitle: r.sessionTitle, cwd: r.cwd, project: r.project, branch: r.branch, source: r.source, turnId: r.turnId, step: r.step,
+    agentId: r.agentId, agentType: r.agentType, agentDescription: r.agentDescription, agent: FACETS.agent, model: r.model,
+    modelAnswered: r.modelAnswered, effort: r.effort, stopReason: r.stopReason, error: r.error, messageCount: r.messageCount,
+    engineVersion: r.engineVersion, inputTokens: r.inputTokens, outputTokens: r.outputTokens, cacheReadTokens: r.cacheReadTokens,
+    cacheWriteTokens: r.cacheWriteTokens, toolNamesJson: r.toolNames, serverToolsJson: r.serverTools, priced: sql<boolean>`${p.priceKey} is not null`.mapWith(Boolean),
+    cost: c, hit: hitRate(z(r.cacheReadTokens), sent),
+    input$: partCost(ttl, 'input'), cacheWrite$: partCost(ttl, 'cacheWrite'), cacheRead$: partCost(ttl, 'cacheRead'), output$: partCost(ttl, 'output'),
+  }).from(r).leftJoin(p, PRICED).where(eq(r.uid, uid)).get()
+  if (!row) return null
+  const { toolNamesJson, serverToolsJson, input$, cacheWrite$, cacheRead$, output$, ...rest } = row
+  const request = {
+    ...rest, toolNames: listOf(toolNamesJson), serverTools: listOf(serverToolsJson),
+    costs: { input: input$, cacheWrite: cacheWrite$, cacheRead: cacheRead$, output: output$ },
+  }
+
+  // Its prompt, worked out as the prompts table does: a main-thread turn,
+  // with each subagent request credited to the session's main-thread turn
+  // that had started by the time it started.
+  let prompt: { key: string; requests: PromptMember[]; totals: { requests: number; cost: number; output: number; durationMs: number } } | null = null
+  if (row.sessionId && row.turnId) {
+    const start = sql`(${r.endedAt} - coalesce(${r.durationMs}, 0))`
+    const members = db.all<PromptMember & { prompt: string | null }>(sql`with f as (
+        select ${r.uid} as uid, ${r.turnId} as turn, ${r.agentId} is not null as sub, ${start} as startedAt, ${r.endedAt} as endedAt,
+          ${r.durationMs} as durationMs, ${FACETS.agent} as agent, ${FACETS.model} as model, ${r.effort} as effort, ${c} as cost,
+          ${r.outputTokens} as output, ${sent} as ctx, ${r.stopReason} as stopReason
+        from ${r} left join ${p} on ${PRICED} where ${r.sessionId} = ${row.sessionId} and ${r.turnId} is not null),
+      m as (select turn, min(startedAt) as start from f where not sub group by turn)
+      select f.*, case when not f.sub then f.turn else
+        (select m.turn from m where m.start <= f.startedAt order by m.start desc limit 1) end as prompt
+      from f order by startedAt, uid`)
+    const key = members.find(m => m.uid === uid)?.prompt ?? null
+    if (key != null) {
+      const requests = members.filter(m => m.prompt === key).map(({ prompt: _, ...m }) => ({ ...m, sub: Boolean(m.sub) }))
+      const first = Math.min(...requests.map(m => m.startedAt)), last = Math.max(...requests.map(m => m.endedAt))
+      prompt = {
+        key, requests,
+        totals: {
+          requests: requests.length, cost: requests.reduce((n, m) => n + (m.cost ?? 0), 0),
+          output: requests.reduce((n, m) => n + (m.output ?? 0), 0), durationMs: last - first,
+        },
+      }
+    }
+  }
+  return { request, prompt }
+}
+export type RequestDetail = NonNullable<ReturnType<typeof requestDetail>>
 
 const WINDOW_MS = 5 * 36e5
 const ACTIVE_MS = 10 * 60_000
@@ -594,7 +660,7 @@ export function summary(db: Db, q: Query, nowMs = Date.now()) {
   }).from(r).leftJoin(p, PRICED).where(and(w, sql`${r.sessionId} is not null`)!).groupBy(r.sessionId)
     .orderBy(desc(sql`max(${r.endedAt})`), asc(r.sessionId)).limit(TIMELINE_SESSIONS).all() as TimelineSession[]
   const events = sessions.length ? db.select({
-    s: sql<string>`${r.sessionId}`, t: sql<number>`${r.endedAt}`, d: r.durationMs, model: FACETS.model,
+    uid: r.uid, s: sql<string>`${r.sessionId}`, t: sql<number>`${r.endedAt}`, d: r.durationMs, model: FACETS.model,
     sub: sql<boolean>`${r.agentId} is not null`.mapWith(Boolean), agent: FACETS.agent, cost: c, hit: hitRate(z(r.cacheReadTokens), sent),
     ctx: num(sent),
   }).from(r).leftJoin(p, PRICED).where(and(w, inArray(r.sessionId, sessions.map(x => x.id)))!)

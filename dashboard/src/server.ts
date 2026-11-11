@@ -7,8 +7,8 @@ import { hostname } from 'node:os'
 import { dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import index from './index.html'
-import { exportRows, ingest, localRows, open, setPrices, summary, syncPeer, table, TABLES, type Query, type Sort, type TableName } from './db'
-import { ExportParams, FACET_KEYS, type Prices, PricesFile, QueryParams } from './schemas'
+import { exportRows, ingest, localRows, open, requestDetail, setPrices, summary, syncPeer, table, TABLES, type Query, type Sort, type TableName } from './db'
+import { ExportParams, FACET_KEYS, type Prices, PricesFile, QueryParams, RequestParams } from './schemas'
 
 const { values: args } = parseArgs({
   options: {
@@ -115,6 +115,13 @@ const server = serve({
       if (!TABLES.includes(name)) return json(req, { error: 'unknown table' }, 400)
       const q = parseQuery(url.searchParams)
       return json(req, table(db, q, name, q.page, q.pageSize, q.sort))
+    }),
+    // One request in full, for the detail drawer.
+    '/api/request': args['source-only'] ? notFound : guarded((req, url) => {
+      const v = RequestParams.safeParse(Object.fromEntries(url.searchParams))
+      if (!v.success) return json(req, { error: 'uid is required' }, 400)
+      const detail = requestDetail(db, v.data.uid, v.data.ttl)
+      return detail ? json(req, detail) : json(req, { error: 'no such request' }, 404)
     }),
     '/api/export': guarded(async (req, url) => {
       await refresh()

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { bucketLabel, chartRows, comparison, fmt, ms, readHash, sessionName, seriesColor, TOP_SERIES, usd, windowOf, writeHash } from '../src/lib/view'
+import { bucketLabel, chartRows, comparison, outcomeLabel, fmt, ms, readHash, sessionName, seriesColor, TOP_SERIES, usd, windowOf, writeHash } from '../src/lib/view'
 
 test('the view round-trips through the URL hash and ignores junk', () => {
   const v = readHash('#machine=server&model=claude-opus-5-5&days=30&ttl=5m&metric=cost&q=trace&from=2026-11-01')
@@ -90,4 +90,18 @@ test('the comparison names the period before and says how cost and requests move
   expect(comparison(k(123, 30), k(10, 10), { days: 14 })).toBe('Compared with the 14 days before, cost is up 12-fold and requests are up 3-fold.')
   expect(comparison(k(5, 3), k(5, 3), { days: 30, from: '2026-11-01', to: '2026-11-03' }, 3 * 864e5)).toBe(
     'Compared with the 3 days before, cost and requests are about the same.')
+})
+
+test('a cost too small to show reads as under a hundredth of a cent, never as zero', () => {
+  expect(usd(0.00004)).toBe('<$0.0001')
+  expect(usd(0)).toBe('$0')
+  expect(usd(0.0042)).toBe('$0.0042')
+})
+
+test('a stop reason reads in words', () => {
+  expect(outcomeLabel('tool_use')).toBe('asked for tools')
+  expect(outcomeLabel('end_turn')).toBe('finished')
+  expect(outcomeLabel('max_tokens')).toBe('hit the output limit')
+  expect(outcomeLabel('something_new')).toBe('something new')
+  expect(outcomeLabel(null)).toBe('no response')
 })

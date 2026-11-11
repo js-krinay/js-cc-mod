@@ -34,6 +34,11 @@ export const requests = sqliteTable('requests', {
   cacheReadTokens: real('cache_read_tokens'),
   cacheWriteTokens: real('cache_write_tokens'),
   tools: real('tools'),
+  // JSON arrays of names, as logged.
+  toolNames: text('tool_names'),
+  serverTools: text('server_tools'),
+  messageCount: real('message_count'),
+  engineVersion: text('engine_version'),
   error: text('error'),
 }, t => [
   index('requests_ended_at').on(t.endedAt), index('requests_origin').on(t.origin),

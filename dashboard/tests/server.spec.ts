@@ -89,5 +89,12 @@ test('a table pages on its own endpoint, under the same host guard', async () =>
   // A bad sort or direction is ignored, never an error.
   expect((await get('/api/table?name=recent&since=0&sort=evil;drop&dir=sideways')).status).toBe(200)
   expect((await get('/api/table?name=nope')).status).toBe(400)
+  const uid = page.rows[0].uid
+  const detail = await get(`/api/request?uid=${encodeURIComponent(uid)}`)
+  expect(detail.status).toBe(200)
+  expect((await detail.json()).request.uid).toBe(uid)
+  expect((await get('/api/request?uid=nope')).status).toBe(404)
+  expect((await get('/api/request')).status).toBe(400)
+  expect((await get(`/api/request?uid=${encodeURIComponent(uid)}`, 'evil.example')).status).toBe(403)
   expect((await get('/api/table?name=recent', 'evil.example')).status).toBe(403)
 })
