@@ -1,0 +1,6 @@
+{
+  "name": "js-cc-mod",
+  "description": "Claude Code plugins by js-krinay: request-log logs every model request and shows them on a dashboard",
+  "owner": { "name": "js-krinay" },
+  "plugins": [{ "name": "request-log", "source": "./" }]
+}

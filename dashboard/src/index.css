@@ -1,0 +1,60 @@
+@import "../styles/globals.css";
+@import "@fontsource-variable/atkinson-hyperlegible-next";
+
+/* One family, chosen because this page is mostly figures and ids:
+   Atkinson Hyperlegible keeps 0/O and 1/l/I apart. */
+@theme {
+  --font-sans: "Atkinson Hyperlegible Next Variable", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* The page reads as a meter statement: a cool fog page with blue-slate ink,
+   no boxed panels, one rule between sections. Data colours below are the
+   validated chart palette and stay as they are. */
+:root {
+  --radius: 0.375rem;
+  --background: #f7f9fa; --foreground: #22313d;
+  --card: #f7f9fa; --card-foreground: #22313d;
+  --popover: #ffffff; --popover-foreground: #22313d;
+  --primary: #22313d; --primary-foreground: #f7f9fa;
+  --secondary: #e9eef1; --secondary-foreground: #22313d;
+  --muted: #e9eef1; --muted-foreground: #5e6e7a;
+  --accent: #e9eef1; --accent-foreground: #22313d;
+  --border: #d9dfe3; --input: #cbd3d9; --ring: #5e6e7a;
+}
+.dark {
+  --background: #12191f; --foreground: #e3e9ed;
+  --card: #12191f; --card-foreground: #e3e9ed;
+  --popover: #1a232b; --popover-foreground: #e3e9ed;
+  --primary: #e3e9ed; --primary-foreground: #12191f;
+  --secondary: #1e2830; --secondary-foreground: #e3e9ed;
+  --muted: #1e2830; --muted-foreground: #92a1ac;
+  --accent: #1e2830; --accent-foreground: #e3e9ed;
+  --border: #26313a; --input: #33414c; --ring: #92a1ac;
+}
+
+/* The chart's model colours: the validated categorical palette (worst
+   adjacent colour-blind separation dE 9.1 light / 8.4 dark), stepped for each
+   surface, never cycled; models past the seventh fold into Other. */
+:root {
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+  --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-other: #a3a29c;
+}
+.dark {
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-other: #6b6a65;
+}
+
+/* The heatmap's one-hue sequential ramp (blue 150 to 650, light to dark).
+   In dark mode it runs the other way, so a quiet hour recedes into the
+   surface and the busiest is the brightest. */
+:root {
+  --heat-1: #b7d3f6; --heat-2: #86b6ef; --heat-3: #5598e7; --heat-4: #2a78d6; --heat-5: #1c5cab; --heat-6: #104281;
+}
+.dark {
+  --heat-1: #104281; --heat-2: #1c5cab; --heat-3: #2a78d6; --heat-4: #5598e7; --heat-5: #86b6ef; --heat-6: #b7d3f6;
+}
+
+@layer base {
+  :root { @apply font-sans; }
+  body { @apply m-0 min-w-[320px] bg-background text-[15px] leading-normal text-foreground antialiased; font-variant-numeric: tabular-nums; }
+}
