@@ -56,7 +56,7 @@ export const PeerExport = z.object({
 // Rows per table page until the reader picks another size.
 export const DEFAULT_PAGE_SIZE = 10
 
-export const FACET_KEYS = ['machine', 'session', 'agent', 'model', 'effort', 'branch', 'source', 'stop'] as const
+export const FACET_KEYS = ['machine', 'project', 'session', 'agent', 'model', 'effort', 'branch', 'source', 'stop'] as const
 const facet = z.string().min(1).max(1000).optional().catch(undefined)
 
 // The query string of /api/summary and /api/table. Out-of-range or

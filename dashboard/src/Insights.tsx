@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts'
-import type { AgentShare, CostTypeRow, HeatCell, TimelineEvent, TimelineSession } from './db'
+import type { AgentShare, CostTypeRow, HeatCell, Pauses, TimelineEvent, TimelineSession } from './db'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { COST_TYPES, type CostType, costTypeRows, heatGrid, sparkPath, ticks, timelineLayout } from '@/lib/insights'
+import { COST_TYPES, type CostType, costTypeRows, heatGrid, span, sparkPath, ticks, timelineLayout } from '@/lib/insights'
 import { fmt, ms, OTHER, seriesColor, TOP_SERIES, usd } from '@/lib/view'
 
 const pct = (v: number | null) => (v == null ? '—' : `${Math.round(v * 100)}%`)
@@ -117,24 +117,27 @@ export function HourHeatmap({ cells }: { cells: HeatCell[] }) {
   )
 }
 
-// How much of the spend is delegated: one bar per agent, by cost.
-export function AgentShareChart({ agents, onPick }: { agents: AgentShare[]; onPick: (agent: string) => void }) {
-  const total = agents.reduce((n, a) => n + a.cost, 0)
-  const top = Math.max(0, ...agents.map(a => a.cost))
+// A part-to-whole by cost: one bar per value, biggest first, with its share
+// and request count; click one to filter by it.
+export function ShareBars({ id, title, description, what, rows, onPick }: {
+  id: string; title: string; description: string; what: string; rows: AgentShare[]; onPick: (value: string) => void
+}) {
+  const total = rows.reduce((n, a) => n + a.cost, 0)
+  const top = Math.max(0, ...rows.map(a => a.cost))
   return (
-    <Card data-chart="agent-share">
+    <Card data-chart={id}>
       <CardHeader>
-        <CardTitle>Subagent share of cost</CardTitle>
-        <CardDescription>The main thread against each subagent type. Click one to filter by it.</CardDescription>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent>
-        {agents.length === 0 ? <p className="text-sm text-muted-foreground">Nothing here.</p> : (
+        {rows.length === 0 ? <p className="text-sm text-muted-foreground">No requests match these filters.</p> : (
           <ul className="flex flex-col gap-1">
-            {agents.map(a => (
+            {rows.map(a => (
               <li key={a.k}>
-                <button type="button" onClick={() => onPick(a.k)} aria-label={`Filter by agent ${a.k}`}
-                  className="grid w-full grid-cols-[minmax(6rem,10rem)_1fr_auto] items-center gap-3 rounded-md px-1 py-1 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
-                  <span className="truncate">{a.k}</span>
+                <button type="button" onClick={() => onPick(a.k)} aria-label={`Filter by ${what} ${a.k}`}
+                  className="grid w-full grid-cols-[minmax(6rem,12rem)_1fr_auto] items-center gap-3 rounded-md px-1 py-1 text-left text-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
+                  <span className="truncate" title={a.k}>{a.k}</span>
                   <span className="h-3 rounded-r-[4px] bg-[var(--series-1)]" style={{ width: `${top > 0 ? Math.max(0.5, (a.cost / top) * 100) : 0}%` }} />
                   <span className="grid grid-cols-[4.5rem_3rem_7rem] text-right tabular-nums">
                     <span>{usd(a.cost)}</span>
@@ -145,6 +148,58 @@ export function AgentShareChart({ agents, onPick }: { agents: AgentShare[]; onPi
               </li>
             ))}
           </ul>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// What idle time cost: when a thread waits longer than the cache lasts, its
+// next request writes the whole context to the cache again.
+export function CostOfPauses({ pauses, ttl, writeCost, onPick }: {
+  pauses: Pauses; ttl: '1h' | '5m'; writeCost: number; onPick: (session: string) => void
+}) {
+  const life = ttl === '5m' ? '5 minutes' : 'an hour'
+  return (
+    <Card data-chart="pauses">
+      <CardHeader>
+        <CardTitle>Cost of pauses</CardTitle>
+        <CardDescription>
+          When a session (or a subagent) sits idle for longer than the cache lasts, here {life}, its next request writes the whole
+          context to the cache again. These are those writes.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-5">
+        <p className="text-lg" data-pauses>
+          <span className="font-semibold">{usd(pauses.cost)}</span> after{' '}
+          <span className="font-semibold">{fmt(pauses.count)} {pauses.count === 1 ? 'pause' : 'pauses'}</span>
+          {writeCost > 0 && <>, <span className="font-semibold">{pct(pauses.cost / writeCost)}</span> of all cache-write cost</>}.
+        </p>
+        {pauses.top.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[560px] text-sm">
+              <caption className="pb-2 text-left text-[13px] text-muted-foreground">The costliest pauses</caption>
+              <thead className="text-left text-[13px] text-muted-foreground">
+                <tr><th className="pb-1 font-normal">When</th><th className="pb-1 font-normal">Session</th><th className="pb-1 font-normal">Thread</th>
+                  <th className="pb-1 text-right font-normal">Idle for</th><th className="pb-1 text-right font-normal">Written again</th><th className="pb-1 text-right font-normal">Cost</th></tr>
+              </thead>
+              <tbody>
+                {pauses.top.map(x => (
+                  <tr key={`${x.session}${x.at}`} className="border-t border-border">
+                    <td className="py-1.5 pr-3 whitespace-nowrap">{when(x.at)}</td>
+                    <td className="max-w-[18rem] py-1.5 pr-3">
+                      <button type="button" className="max-w-full truncate text-left hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                        onClick={() => onPick(x.title ?? x.session)} title={x.title ?? x.session}>{x.title ?? x.session}</button>
+                    </td>
+                    <td className="py-1.5 pr-3">{x.agent}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{span(x.gapMs)}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{fmt(x.tokens)} tokens</td>
+                    <td className="py-1.5 text-right tabular-nums">{x.cost == null ? 'unpriced' : usd(x.cost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -228,20 +283,37 @@ export function SessionTimeline({ sessions, events, order, onPick }: {
   )
 }
 
-// Cache hit rate per session, request by request: one small panel per
-// session, so a dip (a long pause, a /clear) shows where the cache was lost.
-export function CacheHitBySession({ sessions, events, onPick }: { sessions: TimelineSession[]; events: TimelineEvent[]; onPick: (title: string) => void }) {
+// Per session, request by request: the cache hit rate (a drop is where the
+// cache was lost) or the prompt size (how full the context got, main thread
+// only, since each subagent has its own). One small panel per session.
+export function PerSession({ sessions, events, onPick }: { sessions: TimelineSession[]; events: TimelineEvent[]; onPick: (title: string) => void }) {
+  const [metric, setMetric] = useState<'hit' | 'ctx'>('hit')
   const W = 240, H = 44
   const bySession = useMemo(() => {
     const m = new Map<string, TimelineEvent[]>()
-    for (const e of events) (m.get(e.s) ?? m.set(e.s, []).get(e.s)!).push(e)
+    for (const e of events) {
+      if (metric === 'ctx' && e.sub) continue
+      ;(m.get(e.s) ?? m.set(e.s, []).get(e.s)!).push(e)
+    }
     return m
-  }, [events])
+  }, [events, metric])
+  // One scale for every panel, so sessions compare.
+  const peak = Math.max(1, ...events.filter(e => !e.sub).map(e => e.ctx))
   return (
     <Card data-chart="cache-hit">
-      <CardHeader>
-        <CardTitle>Cache hit rate by session</CardTitle>
-        <CardDescription>Share of each request's prompt read from cache, over the session. A drop is where the cache was lost and paid for again.</CardDescription>
+      <CardHeader className="has-data-[slot=card-action]:grid-cols-1 sm:has-data-[slot=card-action]:grid-cols-[1fr_auto]">
+        <CardTitle>{metric === 'hit' ? 'Cache hit rate by session' : 'Context size by session'}</CardTitle>
+        <CardDescription>
+          {metric === 'hit'
+            ? 'Share of each request\'s prompt read from cache, over the session. A drop is where the cache was lost and paid for again.'
+            : 'Prompt size of each main-thread request, over the session, on one scale for all panels. A steady climb is a context worth compacting or clearing.'}
+        </CardDescription>
+        <CardAction className="col-start-1 row-start-3 justify-self-start sm:col-start-2 sm:row-start-1 sm:justify-self-end">
+          <ToggleGroup type="single" variant="outline" size="sm" value={metric} onValueChange={m => m && setMetric(m as typeof metric)}>
+            <ToggleGroupItem value="hit" aria-label="Cache hit rate">Cache hit</ToggleGroupItem>
+            <ToggleGroupItem value="ctx" aria-label="Context size">Context size</ToggleGroupItem>
+          </ToggleGroup>
+        </CardAction>
       </CardHeader>
       <CardContent>
         {sessions.length === 0 ? <p className="text-sm text-muted-foreground">No sessions match these filters.</p> : (
@@ -249,23 +321,25 @@ export function CacheHitBySession({ sessions, events, onPick }: { sessions: Time
             {sessions.map(s => {
               const pts = bySession.get(s.id) ?? []
               const low = pts.filter(p => p.hit != null && p.hit < 0.5).length
+              const top = Math.max(0, ...pts.map(p => p.ctx))
+              const line = metric === 'hit' ? sparkPath(pts, W, H) : sparkPath(pts.map(p => ({ t: p.t, hit: p.ctx / peak })), W, H)
               return (
                 <button key={s.id} type="button" onClick={() => onPick(s.title ?? s.id)}
                   className="rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="truncate text-sm">{s.title ?? s.id}</span>
-                    <span className="shrink-0 text-lg font-semibold tabular-nums">{pct(s.hit)}</span>
+                    <span className="shrink-0 text-lg font-semibold tabular-nums">{metric === 'hit' ? pct(s.hit) : fmt(top)}</span>
                   </div>
                   <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="mt-2 h-11 w-full overflow-visible" role="img"
-                    aria-label={`Cache hit rate across ${pts.length} requests; ${low} below half`}>
+                    aria-label={metric === 'hit' ? `Cache hit rate across ${pts.length} requests; ${low} below half` : `Prompt size across ${pts.length} requests, peaking at ${fmt(top)} tokens`}>
                     <line x1={0} x2={W} y1={0} y2={0} className="stroke-border" strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
                     <line x1={0} x2={W} y1={H} y2={H} className="stroke-border" vectorEffect="non-scaling-stroke" />
-                    <path d={sparkPath(pts, W, H)} fill="none" stroke="var(--series-1)" strokeWidth={2} vectorEffect="non-scaling-stroke"
+                    <path d={line} fill="none" stroke="var(--series-1)" strokeWidth={2} vectorEffect="non-scaling-stroke"
                       strokeLinejoin="round" strokeLinecap="round" />
                   </svg>
                   <div className="mt-1 flex justify-between text-xs text-muted-foreground tabular-nums">
-                    <span>{fmt(pts.length)} requests</span>
-                    <span>{low ? `${fmt(low)} under 50%` : 'none under 50%'}</span>
+                    <span>{fmt(pts.length)} {metric === 'ctx' ? 'main-thread ' : ''}requests</span>
+                    <span>{metric === 'hit' ? (low ? `${fmt(low)} under 50%` : 'none under 50%') : `peak ${fmt(top)} tokens`}</span>
                   </div>
                 </button>
               )

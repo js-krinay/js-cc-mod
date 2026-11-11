@@ -1,8 +1,9 @@
 import { ArrowDown, ArrowUp, ArrowUpDown, RefreshCw, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts'
-import type { AgentShare, ChartRow, CostTypeRow, Group, HeatCell, Page, RecentRow, SessionRow, Sort, TableName, TimelineEvent, TimelineSession, Totals } from './db'
-import { AgentShareChart, CacheHitBySession, CostByType, HourHeatmap, SessionTimeline } from './Insights'
+import type { AgentShare, ChartRow, CostTypeRow, Group, HeatCell, Page, Pauses, PromptRow, RecentRow, SessionRow, Sort, TableName, TimelineEvent, TimelineSession, Totals } from './db'
+import { span } from '@/lib/insights'
+import { CostByType, CostOfPauses, HourHeatmap, PerSession, SessionTimeline, ShareBars } from './Insights'
 import logo from './favicon.svg'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -28,8 +29,13 @@ type Summary = {
   costTypes: CostTypeRow[]
   heat: HeatCell[]
   agents: AgentShare[]
+  projects: AgentShare[]
+  pauses: Pauses
   timeline: { sessions: TimelineSession[]; events: TimelineEvent[] }
-  tables: { modelEffort: Page<Group>; agent: Page<Group>; machine: Page<Group>; sessions: Page<SessionRow>; recent: Page<RecentRow> }
+  tables: {
+    modelEffort: Page<Group>; agent: Page<Group>; machine: Page<Group>; project: Page<Group>
+    sessions: Page<SessionRow>; prompts: Page<PromptRow>; recent: Page<RecentRow>
+  }
   sources: { name: string; ok: boolean; rows?: number; error?: string }[]
   prices: { checked: string; basis: string }
   generatedAt: number
@@ -273,6 +279,12 @@ export function App() {
             <Chart data={data} view={view} tz={tz} onMetric={m => update({ metric: m })}
               onDay={d => update({ from: d, to: d })} onModel={m => setFilter('model', m)} />
             <CostByType rows={data.costTypes} {...windowOf(view)} tz={tz} bucketMs={data.bucketMs} hourly={data.hourly} />
+            <CostOfPauses pauses={data.pauses} ttl={view.ttl} writeCost={data.costTypes.reduce((n, c) => n + c.cacheWrite, 0)}
+              onPick={t => setFilter('session', t)} />
+            <div className="max-w-[880px]">
+              <ShareBars id="project-share" title="Spend by project" what="project" rows={data.projects} onPick={v => setFilter('project', v)}
+                description="Each project is the folder Claude Code ran in; a worktree counts under the project that holds it. Click one to filter by it." />
+            </div>
           </Section>
 
           <Section id="when" title="When you work" aside={<Figures items={[
@@ -286,17 +298,22 @@ export function App() {
             ['Sessions', fmt(data.kpis.sessions)], ['Prompt read from cache', pct(cacheShare(data.kpis))],
           ]} />}>
             <SessionTimeline sessions={data.timeline.sessions} events={data.timeline.events} order={data.modelOrder} onPick={t => setFilter('session', t)} />
-            <CacheHitBySession sessions={data.timeline.sessions} events={data.timeline.events} onPick={t => setFilter('session', t)} />
+            <PerSession sessions={data.timeline.sessions} events={data.timeline.events} onPick={t => setFilter('session', t)} />
+            <Prompts first={data.tables.prompts} query={query} sorts={view.sorts} onSort={onSort} onPick={t => setFilter('session', t)} />
             <Sessions first={data.tables.sessions} query={query} sorts={view.sorts} onSort={onSort} onPick={s => setFilter('session', s.title ?? s.k)} />
           </Section>
 
           <Section id="who" title="Who did the work">
-            <div className="max-w-[880px]"><AgentShareChart agents={data.agents} onPick={a => setFilter('agent', a)} /></div>
+            <div className="max-w-[880px]">
+              <ShareBars id="agent-share" title="Subagent share of cost" what="agent" rows={data.agents} onPick={a => setFilter('agent', a)}
+                description="The main thread against each subagent type. Click one to filter by it." />
+            </div>
             <GroupTable name="modelEffort" title="By model and effort" first={data.tables.modelEffort} query={query} sorts={view.sorts} onSort={onSort}
               head={[{ label: 'Model', key: 'k', text: true }, { label: 'Effort' }]} cells={g => { const [m, e] = g.k.split('\u0000'); return [<Swatch key="m" name={m!} order={data.modelOrder} />, e] }}
               onPick={g => { const [m, e] = g.k.split('\u0000'); update(v => ({ ...v, filters: { ...v.filters, model: m, effort: e } })) }} />
             <div className="grid gap-10 xl:grid-cols-2 *:min-w-0">
               <GroupTable name="agent" title="By agent" first={data.tables.agent} query={query} sorts={view.sorts} onSort={onSort} head={[{ label: 'Agent', key: 'k', text: true }]} cells={g => [g.k]} onPick={g => setFilter('agent', g.k)} />
+              <GroupTable name="project" title="By project" first={data.tables.project} query={query} sorts={view.sorts} onSort={onSort} head={[{ label: 'Project', key: 'k', text: true }]} cells={g => [g.k]} onPick={g => setFilter('project', g.k)} />
               <GroupTable name="machine" title="By machine" first={data.tables.machine} query={query} sorts={view.sorts} onSort={onSort} head={[{ label: 'Machine', key: 'k', text: true }]} cells={g => [g.k]} onPick={g => setFilter('machine', g.k)} />
             </div>
           </Section>
@@ -508,6 +525,53 @@ function Sessions({ first, query, sorts, onSort, onPick }: {
             ))}
           </TableBody>
         </Table>
+        <Pager paged={paged} />
+      </CardContent>
+    </Card>
+  )
+}
+
+// One row per prompt you sent: its requests (subagents included), what it
+// cost, how long it took, and how big the context got.
+function Prompts({ first, query, sorts, onSort, onPick }: {
+  first: Page<PromptRow>; query: string; sorts: View['sorts']; onSort: (n: TableName, s: Sort) => void; onPick: (title: string) => void
+}) {
+  const paged = usePaged('prompts', first, query, sorts.prompts, onSort)
+  const rows = paged.page.rows
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Prompts</CardTitle>
+        <CardDescription>
+          Each prompt you sent and every request it set off. A subagent request counts under the prompt that was running when it started.
+          Peak context is the largest main-thread prompt. Click a row to filter to its session, a column to sort.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? <p className="text-sm text-muted-foreground">No prompts match these filters.</p> : (
+          <Table>
+            <Heads paged={paged} cols={[
+              { label: 'Sent', key: 'started' }, { label: 'Session', key: 'title', text: true },
+              { label: 'Requests', key: 'requests', right: true }, { label: 'By subagents', key: 'subagents', right: true },
+              { label: 'Cost', key: 'cost', right: true }, { label: 'Output', key: 'output', right: true },
+              { label: 'Took', key: 'duration', right: true }, { label: 'Peak context', key: 'peak', right: true },
+            ]} />
+            <TableBody>
+              {rows.map(p => (
+                <Pickable key={`${p.session}${p.k}`} onPick={() => onPick(p.title ?? p.session)}>
+                  <TableCell className="whitespace-nowrap">{new Date(p.started).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</TableCell>
+                  <TableCell><div className="max-w-[320px] truncate">{p.title ?? p.session}</div></TableCell>
+                  <TableCell className="text-right tabular-nums">{fmt(p.requests)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmt(p.subagents)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{usd(p.cost)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmt(p.output)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{span(p.durationMs)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmt(p.peak)}</TableCell>
+                </Pickable>
+              ))}
+            </TableBody>
+          </Table>
+        )}
         <Pager paged={paged} />
       </CardContent>
     </Card>

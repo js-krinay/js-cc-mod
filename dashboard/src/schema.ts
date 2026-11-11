@@ -16,6 +16,8 @@ export const requests = sqliteTable('requests', {
   sessionId: text('session_id'),
   sessionTitle: text('session_title'),
   cwd: text('cwd'),
+  // The project the folder belongs to (see projectOf), worked out on insert.
+  project: text('project'),
   branch: text('branch'),
   source: text('source'),
   turnId: text('turn_id'),
@@ -33,7 +35,10 @@ export const requests = sqliteTable('requests', {
   cacheWriteTokens: real('cache_write_tokens'),
   tools: real('tools'),
   error: text('error'),
-}, t => [index('requests_ended_at').on(t.endedAt), index('requests_origin').on(t.origin)])
+}, t => [
+  index('requests_ended_at').on(t.endedAt), index('requests_origin').on(t.origin),
+  index('requests_session').on(t.sessionId, t.endedAt),
+])
 
 // How far each day's JSONL file has been read, in bytes.
 export const files = sqliteTable('files', {

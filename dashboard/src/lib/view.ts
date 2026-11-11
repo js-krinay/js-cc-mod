@@ -4,10 +4,10 @@ import { clamped } from '../schemas'
 
 // Pure helpers the page draws with (tested under bun test).
 
-export const FACET_KEYS = ['machine', 'session', 'agent', 'model', 'effort', 'branch', 'source', 'stop'] as const
+export const FACET_KEYS = ['machine', 'project', 'session', 'agent', 'model', 'effort', 'branch', 'source', 'stop'] as const
 export type FacetKey = (typeof FACET_KEYS)[number]
 export const FACET_LABELS: Record<FacetKey, string> = {
-  machine: 'Machine', session: 'Session', agent: 'Agent', model: 'Model', effort: 'Effort', branch: 'Branch',
+  machine: 'Machine', project: 'Project', session: 'Session', agent: 'Agent', model: 'Model', effort: 'Effort', branch: 'Branch',
   source: 'Source', stop: 'Outcome',
 }
 export const METRICS = { requests: 'Requests', output: 'Output tokens', input: 'Input tokens', cost: 'Cost (USD)' } as const
@@ -28,7 +28,7 @@ export type View = {
 
 // Every table, for its `sort.<table>=<column>.<asc|desc>` hash key. The
 // server checks the column against that table's own columns.
-const TABLE_NAMES: readonly TableName[] = ['modelEffort', 'agent', 'machine', 'sessions', 'recent']
+const TABLE_NAMES: readonly TableName[] = ['modelEffort', 'agent', 'machine', 'project', 'sessions', 'prompts', 'recent']
 const SORT = /^([A-Za-z0-9]{1,40})\.(asc|desc)$/
 
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().catch(undefined)

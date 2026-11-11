@@ -9,6 +9,7 @@ import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import * as schema from './schema'
+import { projectOf } from './lib/project'
 import { DEFAULT_PAGE_SIZE, EXPORT_PAGE, LogRow, PeerExport, type Prices } from './schemas'
 import { files, peers, prices as priceTable, requests } from './schema'
 
@@ -55,8 +56,21 @@ export function open(path: string, prices: Prices): Db {
   if (!tables.includes('__drizzle_migrations')) for (const t of ['requests', 'files', 'peers', 'prices']) sqlite.run(`drop table if exists ${t}`)
   const db = drizzle(sqlite, { schema })
   migrate(db, { migrationsFolder: MIGRATIONS })
+  fillProjects(db)
   setPrices(db, prices)
   return db
+}
+
+// Rows indexed before projects existed get theirs, one folder at a time.
+function fillProjects(db: Db) {
+  const missing = db.selectDistinct({ cwd: requests.cwd }).from(requests)
+    .where(and(sql`${requests.project} is null`, sql`${requests.cwd} is not null`)).all()
+  if (missing.length === 0) return
+  db.transaction(tx => {
+    for (const { cwd } of missing) {
+      tx.update(requests).set({ project: projectOf(cwd) }).where(and(eq(requests.cwd, cwd!), sql`${requests.project} is null`)).run()
+    }
+  })
 }
 
 export function setPrices(db: Db, prices: Prices) {
@@ -88,7 +102,10 @@ export function insertRows(db: Db, origin: string, rows: { uid: string; cells: u
       const values = rows.slice(i, i + 500).map(({ uid, cells }) => {
         // Every field is held to its type by the schema: a bad one is null.
         const row = LogRow.parse(Object.fromEntries(COLUMNS.map((c, j) => [FIELD[c], cells[j]])))
-        return { ...row, uid: storedUid(origin, uid), origin, priceKey: priceKey(row.modelAnswered ?? row.model, models) }
+        return {
+          ...row, uid: storedUid(origin, uid), origin, priceKey: priceKey(row.modelAnswered ?? row.model, models),
+          project: projectOf(row.cwd),
+        }
       })
       added += tx.insert(requests).values(values).onConflictDoNothing().returning({ uid: requests.uid }).all().length
     }
@@ -203,6 +220,7 @@ export const FACETS = {
   machine: sql<string>`coalesce(${r.machine}, '(none)')`,
   session: sql<string>`coalesce(${r.sessionTitle}, ${r.sessionId}, '(none)')`,
   agent: sql<string>`case when ${r.agentId} is null then 'main' else coalesce(${r.agentType}, 'subagent') end`,
+  project: sql<string>`coalesce(${r.project}, '(none)')`,
   model: sql<string>`coalesce(${r.modelAnswered}, ${r.model}, '(none)')`,
   effort: sql<string>`coalesce(${r.effort}, '(none)')`,
   branch: sql<string>`coalesce(${r.branch}, '(none)')`,
@@ -231,15 +249,21 @@ function cost(ttl: Query['ttl']) {
 
 // The same list price split by token type, for the cost-by-type chart. Each
 // part is null for a model with no price, like the total.
-function costParts(ttl: Query['ttl']) {
+// One request's cost for one token type; null for a model with no price.
+function partCost(ttl: Query['ttl'], type: 'input' | 'cacheWrite' | 'cacheRead' | 'output') {
   const long = sql`(${p.over} is not null and ${z(r.inputTokens)} + ${z(r.cacheReadTokens)} + ${z(r.cacheWriteTokens)} > ${p.over})`
   const [w, lw] = ttl === '5m' ? [p.w5, p.lW5] : [p.w1, p.lW1]
-  const part = (tokens: AnySQLiteColumn, rate: AnySQLiteColumn, longRate: AnySQLiteColumn) =>
-    num(sql`coalesce(sum(case when ${p.priceKey} is null then null else ${z(tokens)} * iif(${long}, ${longRate}, ${rate}) / 1e6 end), 0)`)
-  return {
-    input: part(r.inputTokens, p.input, p.lInput), cacheWrite: part(r.cacheWriteTokens, w, lw),
-    cacheRead: part(r.cacheReadTokens, p.rd, p.lRd), output: part(r.outputTokens, p.out, p.lOut),
+  const by: Record<typeof type, [AnySQLiteColumn, AnySQLiteColumn, AnySQLiteColumn]> = {
+    input: [r.inputTokens, p.input, p.lInput], cacheWrite: [r.cacheWriteTokens, w, lw],
+    cacheRead: [r.cacheReadTokens, p.rd, p.lRd], output: [r.outputTokens, p.out, p.lOut],
   }
+  const [tokens, rate, longRate] = by[type]
+  return sql<number | null>`(case when ${p.priceKey} is null then null else ${z(tokens)} * iif(${long}, ${longRate}, ${rate}) / 1e6 end)`
+}
+
+function costParts(ttl: Query['ttl']) {
+  const part = (type: Parameters<typeof partCost>[1]) => num(sql`coalesce(sum(${partCost(ttl, type)}), 0)`)
+  return { input: part('input'), cacheWrite: part('cacheWrite'), cacheRead: part('cacheRead'), output: part('output') }
 }
 
 function where(q: Query, skip?: Facet): SQL {
@@ -286,9 +310,20 @@ export type ChartRow = { b: number; model: string; requests: number; output: num
 export type CostTypeRow = { b: number; input: number; cacheWrite: number; cacheRead: number; output: number }
 export type HeatCell = { dow: number; hour: number; requests: number; cost: number } // dow 0 = Sunday
 export type AgentShare = { k: string; requests: number; cost: number; output: number }
+// A pause: a gap in one thread (a session's main thread, or one subagent)
+// longer than the cache's lifetime, and the cache write that followed it.
+export type Pause = { session: string; title: string | null; agent: string; at: number; gapMs: number; tokens: number; cost: number | null }
+export type Pauses = { count: number; tokens: number; cost: number; top: Pause[] }
+export type PromptRow = {
+  k: string; session: string; title: string | null; started: number; durationMs: number
+  requests: number; subagents: number; cost: number; output: number; peak: number | null
+}
 export type TimelineSession = { id: string; title: string | null; machine: string | null; requests: number; cost: number; hit: number | null; last: number }
 // One request on the timeline: s session, t end (ms), d duration (ms), sub a subagent's request.
-export type TimelineEvent = { s: string; t: number; d: number | null; model: string; sub: boolean; agent: string; cost: number | null; hit: number | null }
+export type TimelineEvent = {
+  s: string; t: number; d: number | null; model: string; sub: boolean; agent: string; cost: number | null; hit: number | null
+  ctx: number // prompt size: input plus cache read and write tokens
+}
 
 export const TIMELINE_SESSIONS = 12
 const TIMELINE_EVENTS = 8000
@@ -298,13 +333,14 @@ function quantile(sorted: number[], q: number) {
   return sorted.length === 0 ? null : sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!
 }
 
-export const TABLES = ['modelEffort', 'agent', 'machine', 'sessions', 'recent'] as const
+export const TABLES = ['modelEffort', 'agent', 'machine', 'project', 'sessions', 'prompts', 'recent'] as const
 export type TableName = (typeof TABLES)[number]
-type TableRow = { modelEffort: Group; agent: Group; machine: Group; sessions: SessionRow; recent: RecentRow }
+type TableRow = { modelEffort: Group; agent: Group; machine: Group; project: Group; sessions: SessionRow; prompts: PromptRow; recent: RecentRow }
 const GROUP_KEY = {
   modelEffort: sql<string>`${FACETS.model} || char(0) || ${FACETS.effort}`,
   agent: FACETS.agent,
   machine: FACETS.machine,
+  project: FACETS.project,
 }
 
 // Requests join their prices on this; written out at each query so Drizzle
@@ -315,8 +351,9 @@ const PRICED = eq(p.priceKey, r.priceKey)
 // SQL, so a table sorted by them ranks every group before it pages.
 const GROUP_SORTS = ['k', 'requests', 'cost', 'input', 'cacheRead', 'cacheWrite', 'output', 'p50', 'p95'] as const
 export const SORTS = {
-  modelEffort: GROUP_SORTS, agent: GROUP_SORTS, machine: GROUP_SORTS,
+  modelEffort: GROUP_SORTS, agent: GROUP_SORTS, machine: GROUP_SORTS, project: GROUP_SORTS,
   sessions: ['title', 'last', 'requests', 'cost', 'output', 'cacheRead'],
+  prompts: ['started', 'title', 'requests', 'subagents', 'cost', 'output', 'duration', 'peak'],
   recent: ['time', 'session', 'agent', 'model', 'effort', 'input', 'output', 'cost', 'duration', 'outcome'],
 } as const satisfies Record<TableName, readonly string[]>
 export type Sort = { key: string; dir: 'asc' | 'desc' }
@@ -332,6 +369,10 @@ function sortExprs(name: TableName, c: SQL, key: SQL): Record<string, SQL> {
     output: sql`${r.outputTokens}`, cost: c, duration: sql`${r.durationMs}`,
   }
   if (name === 'sessions') return { ...sums, title: sql`coalesce(max(${r.sessionTitle}), ${r.sessionId})`, last: sql`max(${r.endedAt})` }
+  // The prompts query's own result columns, by name.
+  if (name === 'prompts') return Object.fromEntries(
+    [['started', 'started'], ['title', 'coalesce(title, session)'], ['requests', 'requests'], ['subagents', 'subagents'], ['cost', 'cost'],
+      ['output', 'output'], ['duration', 'duration_ms'], ['peak', 'peak']].map(([k, e]) => [k, sql.raw(e!)]))
   return { ...sums, k: key, input: sum(r.inputTokens), cacheWrite: sum(r.cacheWriteTokens) }
 }
 
@@ -362,6 +403,31 @@ export function table<N extends TableName>(db: Db, q: Query, name: N, page = 1, 
       .orderBy(...orderOf(sortExprs(name, c, sql``), sort, { key: 'time', dir: 'desc' }, [desc(r.endedAt), desc(r.uid)]))
       .limit(size).offset(offset).all()
     return { rows: rows as TableRow[N][], total, page, size }
+  }
+  if (name === 'prompts') {
+    // A prompt is one main-thread turn. A subagent request carries its own
+    // turn id, so it is credited to the main-thread prompt of its session
+    // that had started by the time it started.
+    const start = sql`(${r.endedAt} - coalesce(${r.durationMs}, 0))`
+    const rows = sql`with f as (
+        select ${r.sessionId} as session, ${r.sessionTitle} as title, ${r.turnId} as turn, ${r.agentId} is not null as sub,
+          ${start} as start, ${r.endedAt} as ended, ${c} as c, ${r.outputTokens} as out,
+          ${z(r.inputTokens)} + ${z(r.cacheReadTokens)} + ${z(r.cacheWriteTokens)} as ctx
+        from ${r} left join ${p} on ${PRICED}
+        where ${w} and ${r.sessionId} is not null and ${r.turnId} is not null),
+      m as (select session, turn, min(start) as start from f where not sub group by session, turn),
+      a as (select f.*, case when not f.sub then f.turn else
+          (select m.turn from m where m.session = f.session and m.start <= f.start order by m.start desc limit 1) end as prompt from f),
+      g as (select prompt as k, session, max(title) as title, min(start) as started, max(ended) - min(start) as duration_ms,
+          count(*) as requests, sum(sub) as subagents, coalesce(sum(c), 0) as cost, coalesce(sum(out), 0) as output,
+          max(case when not sub then ctx end) as peak
+        from a where prompt is not null group by session, prompt)`
+    // Raw get returns a bare array of values on this driver; all returns named rows.
+    const total = db.all<{ n: number }>(sql`${rows} select count(*) as n from g`)[0]!.n
+    const order = orderOf(sortExprs(name, c, sql``), sort, { key: 'started', dir: 'desc' }, [sql.raw('session'), sql.raw('k')])
+    const items = db.all<PromptRow>(sql`${rows} select k, session, title, started, duration_ms as durationMs, requests, subagents, cost, output, peak
+      from g order by ${sql.join(order, sql`, `)} limit ${size} offset ${offset}`)
+    return { rows: items as TableRow[N][], total, page, size }
   }
   if (name === 'sessions') {
     const total = db.select({ n: num(sql`count(distinct ${r.sessionId})`) }).from(r).leftJoin(p, PRICED).where(w).get()!.n
@@ -444,6 +510,32 @@ export function summary(db: Db, q: Query) {
     .from(r).leftJoin(p, PRICED).where(w).groupBy(FACETS.agent).orderBy(desc(sql`coalesce(sum(${c}), 0)`), desc(count()), asc(FACETS.agent))
     .limit(50).all() as AgentShare[]
 
+  const projects = db.select({ k: FACETS.project, requests: count(), cost: num(sql`coalesce(sum(${c}), 0)`), output: num(sql`coalesce(sum(${r.outputTokens}), 0)`) })
+    .from(r).leftJoin(p, PRICED).where(w).groupBy(FACETS.project).orderBy(desc(sql`coalesce(sum(${c}), 0)`), desc(count()), asc(FACETS.project))
+    .limit(50).all() as AgentShare[]
+
+  // Pauses: the gap before each request is measured to the previous request
+  // of its thread over the whole log (from a week before the window), not
+  // the filtered rows, so a filter decides which pauses count, never how
+  // long they were. A thread's first request in that span is no pause.
+  const ttlMs = q.ttl === '5m' ? 5 * 60_000 : 60 * 60_000
+  const gaps = db.$with('gaps').as(db.select({
+    uid: sql<string>`${r.uid}`.as('gap_uid'),
+    gap: sql<number | null>`(${r.endedAt} - coalesce(${r.durationMs}, 0))
+      - lag(${r.endedAt}) over (partition by ${r.sessionId}, coalesce(${r.agentId}, '') order by ${r.endedAt}, ${r.uid})`.as('gap'),
+  }).from(r).where(and(sql`${r.sessionId} is not null`, gte(r.endedAt, q.since - 7 * 864e5), lte(r.endedAt, q.until))))
+  const paused = and(w, sql`${gaps.gap} > ${ttlMs}`, sql`${r.cacheWriteTokens} > 0`)
+  const writeCost = partCost(q.ttl, 'cacheWrite')
+  const pausedTotals = db.with(gaps).select({
+    count: count(), tokens: num(sql`coalesce(sum(${r.cacheWriteTokens}), 0)`), cost: num(sql`coalesce(sum(${writeCost}), 0)`),
+  }).from(r).innerJoin(gaps, eq(gaps.uid, r.uid)).leftJoin(p, PRICED).where(paused).get()!
+  const top = db.with(gaps).select({
+    session: sql<string>`${r.sessionId}`, title: r.sessionTitle, agent: FACETS.agent, at: sql<number>`${r.endedAt}`,
+    gapMs: sql<number>`${gaps.gap}`, tokens: sql<number>`${r.cacheWriteTokens}`, cost: writeCost,
+  }).from(r).innerJoin(gaps, eq(gaps.uid, r.uid)).leftJoin(p, PRICED).where(paused)
+    .orderBy(desc(sql`coalesce(${writeCost}, 0)`), desc(r.endedAt)).limit(10).all() as Pause[]
+  const pauses: Pauses = { ...pausedTotals, top }
+
   const sent = sql`${z(r.inputTokens)} + ${z(r.cacheReadTokens)} + ${z(r.cacheWriteTokens)}`
   const sessions = db.select({
     id: sql<string>`${r.sessionId}`, title: sql<string | null>`max(${r.sessionTitle})`, machine: sql<string | null>`max(${r.machine})`,
@@ -454,10 +546,11 @@ export function summary(db: Db, q: Query) {
   const events = sessions.length ? db.select({
     s: sql<string>`${r.sessionId}`, t: sql<number>`${r.endedAt}`, d: r.durationMs, model: FACETS.model,
     sub: sql<boolean>`${r.agentId} is not null`.mapWith(Boolean), agent: FACETS.agent, cost: c, hit: hitRate(z(r.cacheReadTokens), sent),
+    ctx: num(sent),
   }).from(r).leftJoin(p, PRICED).where(and(w, inArray(r.sessionId, sessions.map(x => x.id)))!)
     .orderBy(asc(r.endedAt), asc(r.uid)).limit(TIMELINE_EVENTS).all() as TimelineEvent[] : []
 
   const pageSize = q.pageSize ?? DEFAULT_PAGE_SIZE
   const tables = Object.fromEntries(TABLES.map(n => [n, table(db, q, n, 1, pageSize)])) as { [N in TableName]: Page<TableRow[N]> }
-  return { kpis, facets, modelOrder, hourly, bucketMs: size, chart, costTypes, heat, agents, timeline: { sessions, events }, tables }
+  return { kpis, facets, modelOrder, hourly, bucketMs: size, chart, costTypes, heat, agents, projects, pauses, timeline: { sessions, events }, tables }
 }

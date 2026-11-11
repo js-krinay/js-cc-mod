@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { costTypeRows, heatGrid, HEAT_LEVELS, sparkPath, timelineLayout, WEEKDAYS } from '../src/lib/insights'
+import { costTypeRows, heatGrid, HEAT_LEVELS, span, sparkPath, timelineLayout, WEEKDAYS } from '../src/lib/insights'
 
 const DAY = 864e5
 const T0 = Date.parse('2026-11-12T00:00:00Z')
@@ -32,7 +32,7 @@ test('the heat grid starts on Monday, has 24 hours, and steps cells by share of 
 })
 
 test('a timeline mark spans from its start to its end across the shared track', () => {
-  const ev = (t: number, d: number | null) => ({ s: 'a', t, d, model: 'm', sub: false, agent: 'main', cost: 0, hit: 0.5 })
+  const ev = (t: number, d: number | null) => ({ s: 'a', t, d, model: 'm', sub: false, agent: 'main', cost: 0, hit: 0.5, ctx: 0 })
   const { start, end, marks } = timelineLayout([ev(1000, 1000), ev(3000, 500), ev(2000, null)])
   expect([start, end]).toEqual([0, 3000])
   expect(marks[0]).toMatchObject({ left: 0, width: (1000 / 3000) * 100 })
@@ -47,4 +47,12 @@ test('a sparkline breaks where a request has no cache rate', () => {
   expect(sparkPath([{ t: 0, hit: 0.5 }, { t: 100, hit: 0.75 }], 200, 40)).toBe('M0.0,20.0L200.0,10.0')
   expect(sparkPath([{ t: 0, hit: null }], 200, 40)).toBe('')
   expect(sparkPath([{ t: 0, hit: 0.5 }, { t: 9, hit: null }], 200, 40)).toBe('M0.0,20.0L200.0,20.0') // one rate draws flat
+})
+
+test('an idle length reads in the largest units that fit', () => {
+  expect(span(45_000)).toBe('45s')
+  expect(span(12 * 60_000)).toBe('12m')
+  expect(span(130 * 60_000)).toBe('2h 10m')
+  expect(span(2 * 864e5 + 3 * 36e5)).toBe('2d 3h')
+  expect(span(null)).toBe('—')
 })

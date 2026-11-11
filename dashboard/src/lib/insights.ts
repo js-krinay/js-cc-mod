@@ -86,3 +86,15 @@ export function sparkPath(points: { t: number; hit: number | null }[], w: number
   }
   return d
 }
+
+// An idle length in the two largest units that fit: 45s, 12m, 2h 10m, 2d 3h.
+export function span(ms: number | null): string {
+  if (ms == null || !Number.isFinite(ms)) return '—'
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return m % 60 ? `${h}h ${m % 60}m` : `${h}h`
+  return h % 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : `${Math.floor(h / 24)}d`
+}

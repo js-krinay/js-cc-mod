@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import pricesFile from '../prices.json'
 import { PricesFile } from '../src/schemas'
+import { Database } from 'bun:sqlite'
 import { COLUMNS, exportRows, ingest, insertRows, open, priceKey, SORTS, summary, syncPeer, table, TABLES, type Query } from '../src/db'
 
 const prices = PricesFile.parse(pricesFile)
@@ -278,6 +279,87 @@ describe('summary', () => {
     const order = (dir: 'asc' | 'desc') => [1, 2, 3].map(n => table(db, q(), 'machine', n, 1, { key: 'p95', dir }).rows[0]!.k)
     expect(order('asc')).toEqual(['a', 'c', 'b'])
     expect(order('desc')).toEqual(['b', 'c', 'a'])
+  })
+})
+
+describe('projects, pauses and prompts', () => {
+  const at = (min: number) => new Date(T0 + min * 60_000).toISOString()
+
+  test('each request carries its project, which filters, groups and shares the cost', async () => {
+    const { d, db } = setup()
+    writeFileSync(join(d, '2026-11-12.jsonl'), [
+      line({ cwd: '/w/shop', sessionId: 'a' }),
+      line({ cwd: '/w/shop/.worktrees/fix-cart', sessionId: 'b' }),
+      line({ cwd: '/w/blog', sessionId: 'c', model: 'claude-haiku-5-5', modelAnswered: 'claude-haiku-5-5' }),
+      line({ cwd: null, sessionId: 'd' }),
+    ].join(''))
+    await ingest(db, d, 'mac', prices.models)
+    const s = summary(db, q())
+    expect(Object.fromEntries(s.facets.project.map(f => [f.value, f.n]))).toEqual({ shop: 2, blog: 1, '(none)': 1 })
+    expect(s.projects.map(p => p.k)).toEqual(['shop', '(none)', 'blog']) // by cost: two opus requests, one, then haiku
+    expect(s.projects.reduce((n, p) => n + p.cost, 0)).toBeCloseTo(s.kpis.cost)
+    expect(summary(db, q({ filters: { project: 'shop' } })).kpis.requests).toBe(2)
+    expect(table(db, q(), 'project', 1, 10).rows.map(g => g.k)).toContain('blog')
+  })
+
+  test('an index from before projects gets them filled in on open', async () => {
+    const { d, db } = setup()
+    writeFileSync(join(d, '2026-11-12.jsonl'), line({ cwd: '/w/shop/.claude/worktrees/x' }))
+    await ingest(db, d, 'mac', prices.models)
+    const raw = new Database(join(d, 'index.sqlite'))
+    raw.run('update requests set project = null')
+    raw.close()
+    const again = open(join(d, 'index.sqlite'), prices)
+    expect(summary(again, q()).facets.project.map(f => f.value)).toEqual(['shop'])
+  })
+
+  test('a pause past the cache lifetime counts the cache write that follows it, per thread', async () => {
+    const { d, db } = setup()
+    const req = (min: number, over: Record<string, unknown> = {}) =>
+      line({ sessionId: 's', endedAt: at(min), durationMs: 0, inputTokens: 0, cacheWriteTokens: 1_000_000, ...over })
+    writeFileSync(join(d, '2026-11-12.jsonl'), [
+      req(0), req(10), req(140), // main: gaps of 10 min and 130 min
+      req(1, { agentId: 'a1', agentType: 'Explore' }), // a subagent's first request is no pause
+      req(141, { agentId: 'a1', agentType: 'Explore' }), // its own thread: 140 min since its last, though main ran a minute ago
+      req(150, { cacheWriteTokens: 0 }), // a short gap with nothing written
+    ].join(''))
+    await ingest(db, d, 'mac', prices.models)
+    const hour = summary(db, q({ since: T0 - 864e5, until: T0 + 864e5 })).pauses
+    expect(hour.count).toBe(2)
+    expect(hour.tokens).toBe(2_000_000)
+    expect(hour.cost).toBeCloseTo(2 * prices.models['claude-opus-5-5']![2]) // the 1-hour write rate
+    expect(hour.top.map(x => [x.agent, x.gapMs])).toEqual([['Explore', 140 * 60_000], ['main', 130 * 60_000]])
+    const five = summary(db, q({ since: T0 - 864e5, until: T0 + 864e5, ttl: '5m' })).pauses
+    expect(five.count).toBe(3)
+    expect(five.cost).toBeCloseTo(3 * prices.models['claude-opus-5-5']![1])
+    // A filter narrows which pauses count, never the gap: the previous request still ends the gap.
+    expect(summary(db, q({ since: T0 - 864e5, until: T0 + 864e5, filters: { agent: 'main' } })).pauses.count).toBe(1)
+  })
+
+  test('a prompt totals its requests, with each subagent request credited to the prompt running when it started', async () => {
+    const { d, db } = setup()
+    writeFileSync(join(d, '2026-11-12.jsonl'), [
+      line({ sessionId: 's', turnId: 't1', endedAt: at(0), durationMs: 60_000, inputTokens: 100, cacheReadTokens: 900 }),
+      line({ sessionId: 's', turnId: 'x9', agentId: 'a1', agentType: 'Explore', endedAt: at(2), durationMs: 30_000 }),
+      line({ sessionId: 's', turnId: 't1', endedAt: at(3), durationMs: 1_000, inputTokens: 100, cacheReadTokens: 4_900 }),
+      line({ sessionId: 's', turnId: 't2', endedAt: at(20), durationMs: 1_000, outputTokens: 50 }),
+      line({ sessionId: 'z', turnId: null, source: 'model.complete' }), // a plugin's call is no prompt
+    ].join(''))
+    await ingest(db, d, 'mac', prices.models)
+    const p = table(db, q(), 'prompts', 1, 10)
+    expect(p.total).toBe(2)
+    const t1 = p.rows.find(r => r.k === 't1')!
+    expect(t1).toMatchObject({ session: 's', requests: 3, subagents: 1, peak: 5_000 })
+    expect(t1.durationMs).toBe(4 * 60_000) // from the first start to the last end
+    expect(table(db, q(), 'prompts', 1, 1, { key: 'cost', dir: 'desc' }).rows[0]!.k).toBe('t1')
+    expect(table(db, q(), 'prompts', 1, 1, { key: 'started', dir: 'desc' }).rows[0]!.k).toBe('t2')
+  })
+
+  test('timeline requests carry their prompt size', async () => {
+    const { d, db } = setup()
+    writeFileSync(join(d, '2026-11-12.jsonl'), line({ inputTokens: 10, cacheReadTokens: 20, cacheWriteTokens: 30 }))
+    await ingest(db, d, 'mac', prices.models)
+    expect(summary(db, q()).timeline.events[0]!.ctx).toBe(60)
   })
 })
 
