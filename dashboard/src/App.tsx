@@ -8,7 +8,7 @@ import logo from './favicon.svg'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
-import { Checkbox } from '@/components/ui/checkbox'
+import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -211,7 +211,10 @@ export function App() {
             : data ? <Sources sources={data.sources} at={data.generatedAt} /> : 'Loading the log…'}
         </p>
         <div className="flex items-center gap-4">
-          <Label className="text-[13px] font-normal text-muted-foreground"><Checkbox checked={auto} onCheckedChange={c => setAuto(c === true)} /> Refresh every minute</Label>
+          <div className="flex items-center gap-2">
+            <Switch id="auto-refresh" checked={auto} onCheckedChange={setAuto} />
+            <Label htmlFor="auto-refresh" className="text-[13px] font-normal text-muted-foreground">Refresh every minute</Label>
+          </div>
           <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={loading ? 'animate-spin' : ''} /> Refresh
           </Button>
