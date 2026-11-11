@@ -74,3 +74,7 @@ cd dashboard && bun install && bun test     # dashboard: SQLite index, server, p
 claude plugin test .                        # the logger's hooks
 claude plugin validate .
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
