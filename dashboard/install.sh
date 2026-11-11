@@ -129,7 +129,7 @@ if [ "$ENABLE" = 1 ]; then "$BUN" "$DIR/scripts/enable-logging.ts"; fi
 # assets load from the site root, which a sub-path mount would break.
 [ -n "$TS" ] && ts_serve --bg --https="$TS_PORT" "http://127.0.0.1:$PORT" >/dev/null
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-  curl -fsS -o /dev/null "http://127.0.0.1:$PORT/api/export?limit=1" && break
+  curl -fs -o /dev/null "http://127.0.0.1:$PORT/api/export?limit=1" && break
   sleep 1
 done
 URL=${TS:+https://$NAME:$TS_PORT/}
