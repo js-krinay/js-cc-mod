@@ -67,6 +67,17 @@ dashboard/install.sh --source-only
 
 A `--source-only` machine serves its rows to the dashboard and shows no page of its own. The dashboard's Machine filter then splits the requests by machine.
 
+### From anywhere, behind a login
+
+To open the dashboard away from your machines, put a login in front of it before giving it a public name. With Cloudflare, for example:
+
+1. Create a Cloudflare Access application for the hostname, with a policy that allows only your email.
+2. Create a Cloudflare Tunnel that sends that hostname to `http://127.0.0.1:8787`, with the tunnel's Access check turned on (`originRequest.access`), and run its connector on this machine.
+3. Rerun `dashboard/install.sh` with `--host <your hostname>` (plus any `--peer` you use), so the dashboard answers to that name.
+4. Add the DNS record last, then check that a signed-out request is sent to the login page rather than answered.
+
+The dashboard answers only to names it was given, and binds to `127.0.0.1`, so nothing reaches it except through the tunnel.
+
 ## Run it from a checkout instead
 
 To load the logger from a working copy (for example while changing it), skip the plugin install and run:

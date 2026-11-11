@@ -3,7 +3,7 @@
 # Tailscale it is published to your tailnet at https://<machine>.<tailnet>.ts.net:8443/;
 # without it, it answers on http://127.0.0.1:8787/ only.
 #
-#   install.sh [--enable-logging] [--port N] [--ts-port N] [--no-tailscale] [--peer URL ...]
+#   install.sh [--enable-logging] [--port N] [--ts-port N] [--no-tailscale] [--peer URL ...] [--host NAME ...]
 #   install.sh [--enable-logging] --source-only
 #   install.sh --uninstall
 #
@@ -12,6 +12,9 @@
 # --source-only: this machine has no dashboard of its own; it serves its
 #   rows to the main dashboard, which lists it with --peer.
 # --no-tailscale: keep it on this machine even when Tailscale is installed.
+# --host: another name the page is reached by, for a tunnel or proxy in front
+#   of it (e.g. a Cloudflare Tunnel behind Cloudflare Access); the server
+#   answers only names it was given. Put an access control in front first.
 #
 # --enable-logging also adds the request-log mod to this machine's Claude Code
 # settings, so new sessions log their requests. macOS: a launchd agent.
@@ -36,6 +39,7 @@ while [ $# -gt 0 ]; do
     --ts-port) TS_PORT=$2; shift 2 ;;
     --no-tailscale) USE_TS=0; shift ;;
     --peer) SERVER_ARGS="$SERVER_ARGS --peer $2"; shift 2 ;;
+    --host) SERVER_ARGS="$SERVER_ARGS --host $2"; shift 2 ;;
     --source-only) SERVER_ARGS="$SERVER_ARGS --source-only"; SOURCE=1; shift ;;
     --enable-logging) ENABLE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
