@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
-  chartRows, FACET_KEYS, FACET_LABELS, type FacetKey, fmt, METRICS, type Metric, metricFormat, ms, OTHER, pct, readHash,
+  chartRows, FACET_KEYS, sessionName, FACET_LABELS, type FacetKey, fmt, METRICS, type Metric, metricFormat, ms, OTHER, pct, readHash,
   seriesColor, usd, type View, windowOf, writeHash,
 } from '@/lib/view'
 
@@ -515,7 +515,7 @@ function Sessions({ first, query, sorts, onSort, onPick }: {
           <TableBody>
             {rows.map(s => (
               <Pickable key={s.k} onPick={() => onPick(s)}>
-                <TableCell><div className="max-w-[420px] truncate">{s.title ?? s.k}</div><div className="text-xs text-muted-foreground">{s.machine}{s.branch ? `, on ${s.branch}` : ''}</div></TableCell>
+                <TableCell><div className="max-w-[420px] truncate">{sessionName(s.title, s.k)}</div><div className="text-xs text-muted-foreground">{s.machine}{s.branch ? `, on ${s.branch}` : ''}</div></TableCell>
                 <TableCell>{s.last ? new Date(s.last).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</TableCell>
                 <TableCell className="text-right tabular-nums">{fmt(s.requests)}</TableCell>
                 <TableCell className="text-right tabular-nums">{usd(s.cost)}{s.unpriced ? '*' : ''}</TableCell>
@@ -560,7 +560,7 @@ function Prompts({ first, query, sorts, onSort, onPick }: {
               {rows.map(p => (
                 <Pickable key={`${p.session}${p.k}`} onPick={() => onPick(p.title ?? p.session)}>
                   <TableCell className="whitespace-nowrap">{new Date(p.started).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</TableCell>
-                  <TableCell><div className="max-w-[320px] truncate">{p.title ?? p.session}</div></TableCell>
+                  <TableCell><div className="max-w-[320px] truncate">{sessionName(p.title, p.session)}</div></TableCell>
                   <TableCell className="text-right tabular-nums">{fmt(p.requests)}</TableCell>
                   <TableCell className="text-right tabular-nums">{fmt(p.subagents)}</TableCell>
                   <TableCell className="text-right tabular-nums">{usd(p.cost)}</TableCell>

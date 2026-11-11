@@ -5,7 +5,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { COST_TYPES, type CostType, costTypeRows, heatGrid, span, sparkPath, ticks, timelineLayout } from '@/lib/insights'
-import { fmt, ms, OTHER, seriesColor, TOP_SERIES, usd } from '@/lib/view'
+import { fmt, ms, OTHER, seriesColor, sessionName, TOP_SERIES, usd } from '@/lib/view'
 
 const pct = (v: number | null) => (v == null ? '—' : `${Math.round(v * 100)}%`)
 const when = (t: number, opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) =>
@@ -170,11 +170,15 @@ export function CostOfPauses({ pauses, ttl, writeCost, onPick }: {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
-        <p className="text-lg" data-pauses>
+        {pauses.count === 0 ? (
+          <p className="text-lg" data-pauses>
+            No pauses longer than {life} in this period: every session picked up again while its cache was still warm.
+          </p>
+        ) : <p className="text-lg" data-pauses>
           <span className="font-semibold">{usd(pauses.cost)}</span> after{' '}
           <span className="font-semibold">{fmt(pauses.count)} {pauses.count === 1 ? 'pause' : 'pauses'}</span>
           {writeCost > 0 && <>, <span className="font-semibold">{pct(pauses.cost / writeCost)}</span> of all cache-write cost</>}.
-        </p>
+        </p>}
         {pauses.top.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[560px] text-sm">
@@ -189,7 +193,7 @@ export function CostOfPauses({ pauses, ttl, writeCost, onPick }: {
                     <td className="py-1.5 pr-3 whitespace-nowrap">{when(x.at)}</td>
                     <td className="max-w-[18rem] py-1.5 pr-3">
                       <button type="button" className="max-w-full truncate text-left hover:underline focus-visible:outline-2 focus-visible:outline-ring"
-                        onClick={() => onPick(x.title ?? x.session)} title={x.title ?? x.session}>{x.title ?? x.session}</button>
+                        onClick={() => onPick(x.title ?? x.session)} title={sessionName(x.title, x.session)}>{sessionName(x.title, x.session)}</button>
                     </td>
                     <td className="py-1.5 pr-3">{x.agent}</td>
                     <td className="py-1.5 pr-3 text-right tabular-nums">{span(x.gapMs)}</td>
@@ -248,9 +252,9 @@ export function SessionTimeline({ sessions, events, order, onPick }: {
                 </div>
                 {sessions.map(s => (
                   <div key={s.id} className="flex items-stretch border-t border-border py-1.5">
-                    <button type="button" onClick={() => onPick(s.title ?? s.id)} title={s.title ?? s.id}
+                    <button type="button" onClick={() => onPick(s.title ?? s.id)} title={sessionName(s.title, s.id)}
                       className="w-[13rem] shrink-0 truncate pr-3 text-left text-sm hover:underline focus-visible:outline-2 focus-visible:outline-ring">
-                      <span className="block truncate">{s.title ?? s.id}</span>
+                      <span className="block truncate">{sessionName(s.title, s.id)}</span>
                       <span className="block truncate text-xs text-muted-foreground">{fmt(s.requests)} requests, {usd(s.cost)}, {pct(s.hit)} cached</span>
                     </button>
                     <div className="relative flex-1">
@@ -327,7 +331,7 @@ export function PerSession({ sessions, events, onPick }: { sessions: TimelineSes
                 <button key={s.id} type="button" onClick={() => onPick(s.title ?? s.id)}
                   className="rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring">
                   <div className="flex items-baseline justify-between gap-2">
-                    <span className="truncate text-sm">{s.title ?? s.id}</span>
+                    <span className="truncate text-sm">{sessionName(s.title, s.id)}</span>
                     <span className="shrink-0 text-lg font-semibold tabular-nums">{metric === 'hit' ? pct(s.hit) : fmt(top)}</span>
                   </div>
                   <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="mt-2 h-11 w-full overflow-visible" role="img"

@@ -146,3 +146,8 @@ export const ms = (v: unknown) => {
 }
 export const pct = (v: unknown) => { const n = num(v); return n == null ? '—' : `${(n * 100).toFixed(1)}%` }
 export const metricFormat = (m: Metric) => (m === 'cost' ? usd : fmt)
+
+// A session's name: its title, or, for one with none (a one-shot run), the
+// start of its id, which is enough to tell it apart.
+export const sessionName = (title: string | null | undefined, id: string | null | undefined) =>
+  title || (id ? `Untitled session ${id.slice(0, 8)}` : 'Untitled session')

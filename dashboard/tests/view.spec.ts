@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { bucketLabel, chartRows, fmt, ms, readHash, seriesColor, TOP_SERIES, usd, windowOf, writeHash } from '../src/lib/view'
+import { bucketLabel, chartRows, fmt, ms, readHash, sessionName, seriesColor, TOP_SERIES, usd, windowOf, writeHash } from '../src/lib/view'
 
 test('the view round-trips through the URL hash and ignores junk', () => {
   const v = readHash('#machine=server&model=claude-opus-5-5&days=30&ttl=5m&metric=cost&q=trace&from=2026-11-01')
@@ -74,4 +74,10 @@ test('query parameters clamp to their range and fall back when unreadable', asyn
   expect(QueryParams.parse({ size: '9999', tz: '-5000', page: '0', ttl: 'x', machine: '' })).toMatchObject({ size: 200, tz: -840, page: 1, ttl: '1h', machine: undefined })
   expect(QueryParams.parse({ size: 'abc' }).size).toBe(10)
   expect(ExportParams.parse({ after: '-3', limit: '999999' })).toEqual({ after: 0, limit: 5000 })
+})
+
+test('a session without a title is named by the start of its id', () => {
+  expect(sessionName('Fix the cart', 'f5efec30-fbe2-4136-a3dc-b591b47bd593')).toBe('Fix the cart')
+  expect(sessionName(null, 'f5efec30-fbe2-4136-a3dc-b591b47bd593')).toBe('Untitled session f5efec30')
+  expect(sessionName(null, null)).toBe('Untitled session')
 })
