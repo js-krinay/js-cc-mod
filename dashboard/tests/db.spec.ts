@@ -363,6 +363,65 @@ describe('projects, pauses and prompts', () => {
   })
 })
 
+describe('right now and the period before', () => {
+  const H = 36e5
+  const at = (h: number) => new Date(T0 + h * H).toISOString()
+
+  test('the current 5-hour window starts at the first request after the last window ran out', async () => {
+    const { d, db } = setup()
+    writeFileSync(join(d, '2026-11-12.jsonl'), [
+      line({ endedAt: at(0), durationMs: 0, turnId: 't1' }),
+      line({ endedAt: at(1), durationMs: 0, turnId: 't1' }), // same window
+      line({ endedAt: at(5.5), durationMs: 0, turnId: 't2', machine: 'server' }), // after it ran out: a new one
+      line({ endedAt: at(6), durationMs: 0, turnId: 't3' }),
+      line({ endedAt: at(6.1), durationMs: 0, agentId: 'a1', turnId: 'x' }), // a subagent is no prompt of its own
+    ].join(''))
+    await ingest(db, d, 'mac', prices.models)
+    // Filters never narrow it: it covers the whole log.
+    const now = summary(db, q({ filters: { machine: 'mac' } }), T0 + 6.2 * H).now
+    expect(now.window).toMatchObject({ start: T0 + 5.5 * H, resets: T0 + 10.5 * H, requests: 3, prompts: 2 })
+    expect(now.window!.cost).toBeCloseTo(3 * prices.models['claude-opus-5-5']![0])
+    expect(summary(db, q(), T0 + 11 * H).now.window).toBeNull() // ran out with nothing since
+  })
+
+  test('active sessions are those with a request in the last ten minutes, and the last request is named', async () => {
+    const { d, db } = setup()
+    writeFileSync(join(d, '2026-11-12.jsonl'), [
+      line({ endedAt: at(0), sessionId: 'old', sessionTitle: 'Old' }),
+      line({ endedAt: at(1 - 5 / 60), sessionId: 'a', sessionTitle: 'Cart fix' }),
+      line({ endedAt: at(1 - 1 / 60), sessionId: 'b', sessionTitle: null, model: 'claude-haiku-5-5', modelAnswered: 'claude-haiku-5-5' }),
+    ].join(''))
+    await ingest(db, d, 'mac', prices.models)
+    const now = summary(db, q(), T0 + H).now
+    expect(now.active.map(x => x.id)).toEqual(['b', 'a'])
+    expect(now.last).toMatchObject({ at: T0 + H - 60_000, model: 'claude-haiku-5-5', session: 'b', title: null, machine: 'mac' })
+  })
+
+  test('today counts from midnight in the viewer\'s clock', async () => {
+    const { d, db } = setup()
+    // 2026-11-12 10:00 UTC is 15:30 in India; 2026-11-11 20:00 UTC is 01:30 on the 12th there.
+    writeFileSync(join(d, '2026-11-12.jsonl'), [line({ endedAt: at(0) }), line({ endedAt: at(-14) }), line({ endedAt: at(-20) })].join(''))
+    await ingest(db, d, 'mac', prices.models)
+    expect(summary(db, q({ tzOffsetMin: 0 }), T0 + H).now.today.requests).toBe(1)
+    expect(summary(db, q({ tzOffsetMin: 330 }), T0 + H).now.today.requests).toBe(2)
+  })
+
+  test('the period before is the same length, just before, under the same filters', async () => {
+    const { d, db } = setup()
+    writeFileSync(join(d, '2026-11-12.jsonl'), [
+      line({ endedAt: at(-1) }), line({ endedAt: at(-2) }), // this period
+      line({ endedAt: at(-30), machine: 'server' }), line({ endedAt: at(-40) }), line({ endedAt: at(-47) }), // the one before
+      line({ endedAt: at(-60) }), // older still
+    ].join(''))
+    await ingest(db, d, 'mac', prices.models)
+    const s = summary(db, q({ since: T0 - 24 * H, until: T0 }), T0)
+    expect(s.kpis.requests).toBe(2)
+    expect(s.prev).toMatchObject({ since: T0 - 48 * H, until: T0 - 24 * H, requests: 3 })
+    expect(s.prev.cost).toBeCloseTo(3 * prices.models['claude-opus-5-5']![0])
+    expect(summary(db, q({ since: T0 - 24 * H, until: T0, filters: { machine: 'mac' } }), T0).prev.requests).toBe(2)
+  })
+})
+
 describe('peers', () => {
   test('a peer cannot hide or replace a local row by sending the same id', async () => {
     const me = setup()

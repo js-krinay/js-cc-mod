@@ -465,13 +465,63 @@ export function table<N extends TableName>(db: Db, q: Query, name: N, page = 1, 
   return { rows: paged as TableRow[N][], total, page, size }
 }
 
-export function summary(db: Db, q: Query) {
+const WINDOW_MS = 5 * 36e5
+const ACTIVE_MS = 10 * 60_000
+
+export type Now = {
+  window: { start: number; resets: number; requests: number; prompts: number; cost: number; output: number } | null
+  active: { id: string; title: string | null; machine: string | null; last: number }[]
+  last: { at: number; model: string; session: string | null; title: string | null; machine: string | null } | null
+  today: { requests: number; cost: number }
+}
+
+// What is happening now, over the whole log whatever the page's filters.
+// The 5-hour window is an estimate from the log alone: a window opens with
+// the first request after the last one ran out and lasts five hours. The
+// last day is enough to place it unless requests ran a whole day with no
+// five-hour gap.
+function nowStrip(db: Db, q: Query, nowMs: number): Now {
+  const c = cost(q.ttl)
+  const start = sql<number>`${r.endedAt} - coalesce(${r.durationMs}, 0)`
+  const starts = db.select({ s: start }).from(r).where(and(gte(r.endedAt, nowMs - 24 * 36e5), lte(r.endedAt, nowMs))!)
+    .orderBy(asc(start)).all().map(x => x.s)
+  let open: number | null = null
+  for (const t of starts) if (open == null || t >= open + WINDOW_MS) open = t
+  let window: Now['window'] = null
+  if (open != null && nowMs < open + WINDOW_MS) {
+    const w = db.select({
+      requests: count(), cost: num(sql`coalesce(sum(${c}), 0)`), output: num(sql`coalesce(sum(${r.outputTokens}), 0)`),
+      prompts: num(sql`count(distinct case when ${r.agentId} is null then ${r.sessionId} || char(0) || ${r.turnId} end)`),
+    }).from(r).leftJoin(p, PRICED).where(and(sql`${start} >= ${open}`, lte(r.endedAt, nowMs))!).get()!
+    window = { start: open, resets: open + WINDOW_MS, ...w }
+  }
+  const active = db.select({
+    id: sql<string>`${r.sessionId}`, title: sql<string | null>`max(${r.sessionTitle})`, machine: sql<string | null>`max(${r.machine})`,
+    last: sql<number>`max(${r.endedAt})`,
+  }).from(r).where(and(gte(r.endedAt, nowMs - ACTIVE_MS), lte(r.endedAt, nowMs), sql`${r.sessionId} is not null`)!)
+    .groupBy(r.sessionId).orderBy(desc(sql`max(${r.endedAt})`)).all()
+  const last = db.select({
+    at: sql<number>`${r.endedAt}`, model: FACETS.model, session: r.sessionId, title: r.sessionTitle, machine: r.machine,
+  }).from(r).where(lte(r.endedAt, nowMs)).orderBy(desc(r.endedAt), desc(r.uid)).limit(1).get() ?? null
+  // Midnight in the viewer's clock, as UTC ms.
+  const shift = q.tzOffsetMin * 60_000
+  const midnight = Math.floor((nowMs + shift) / 864e5) * 864e5 - shift
+  const today = db.select({ requests: count(), cost: num(sql`coalesce(sum(${c}), 0)`) })
+    .from(r).leftJoin(p, PRICED).where(and(gte(r.endedAt, midnight), lte(r.endedAt, nowMs))!).get()!
+  return { window, active, last, today }
+}
+
+export function summary(db: Db, q: Query, nowMs = Date.now()) {
   const w = where(q)
   const c = cost(q.ttl)
   const sorted = (col: AnySQLiteColumn) =>
     db.select({ d: sql<number>`${col}` }).from(r).leftJoin(p, PRICED).where(and(w, sql`${col} is not null`)!).orderBy(asc(col)).all().map(x => x.d)
 
   const t = db.select(totals(c)).from(r).leftJoin(p, PRICED).where(w).get() as Totals
+  // The period before: the same length, ending where this one starts, same filters.
+  const len = q.until - q.since
+  const before = db.select(totals(c)).from(r).leftJoin(p, PRICED).where(where({ ...q, since: q.since - len, until: q.since - 1 })).get() as Totals
+  const prev = { since: q.since - len, until: q.since, ...before }
   const durations = sorted(r.durationMs)
   const firsts = sorted(r.firstChunkMs)
   const kpis = { ...t, p50: quantile(durations, 0.5), p95: quantile(durations, 0.95), firstP50: quantile(firsts, 0.5) }
@@ -552,5 +602,5 @@ export function summary(db: Db, q: Query) {
 
   const pageSize = q.pageSize ?? DEFAULT_PAGE_SIZE
   const tables = Object.fromEntries(TABLES.map(n => [n, table(db, q, n, 1, pageSize)])) as { [N in TableName]: Page<TableRow[N]> }
-  return { kpis, facets, modelOrder, hourly, bucketMs: size, chart, costTypes, heat, agents, projects, pauses, timeline: { sessions, events }, tables }
+  return { kpis, facets, modelOrder, hourly, bucketMs: size, chart, costTypes, heat, agents, projects, pauses, timeline: { sessions, events }, prev, now: nowStrip(db, q, nowMs), tables }
 }

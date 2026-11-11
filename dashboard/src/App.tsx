@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUp, ArrowUpDown, RefreshCw, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts'
-import type { AgentShare, ChartRow, CostTypeRow, Group, HeatCell, Page, Pauses, PromptRow, RecentRow, SessionRow, Sort, TableName, TimelineEvent, TimelineSession, Totals } from './db'
+import type { AgentShare, ChartRow, CostTypeRow, Group, HeatCell, Now, Page, Pauses, PromptRow, RecentRow, SessionRow, Sort, TableName, TimelineEvent, TimelineSession, Totals } from './db'
 import { span } from '@/lib/insights'
 import { CostByType, CostOfPauses, HourHeatmap, PerSession, SessionTimeline, ShareBars } from './Insights'
 import logo from './favicon.svg'
@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
-  chartRows, FACET_KEYS, sessionName, FACET_LABELS, type FacetKey, fmt, METRICS, type Metric, metricFormat, ms, OTHER, pct, readHash,
+  chartRows, comparison, FACET_KEYS, sessionName, FACET_LABELS, type FacetKey, fmt, METRICS, type Metric, metricFormat, ms, OTHER, pct, readHash,
   seriesColor, usd, type View, windowOf, writeHash,
 } from '@/lib/view'
 
@@ -31,6 +31,8 @@ type Summary = {
   agents: AgentShare[]
   projects: AgentShare[]
   pauses: Pauses
+  prev: Totals & { since: number; until: number }
+  now: Now
   timeline: { sessions: TimelineSession[]; events: TimelineEvent[] }
   tables: {
     modelEffort: Page<Group>; agent: Page<Group>; machine: Page<Group>; project: Page<Group>
@@ -216,8 +218,11 @@ export function App() {
         </div>
       </header>
 
-      <div className="flex flex-col gap-4 pt-10 pb-8">
+      {data && <NowStrip now={data.now} at={data.generatedAt} />}
+
+      <div className="flex flex-col gap-4 pt-8 pb-8">
         {data ? <Statement data={data} view={view} onDays={d => update({ days: d })} /> : <p className="h-24" />}
+        {data && <p className="max-w-[64ch] text-lg text-muted-foreground" data-comparison>{comparison(data.kpis, data.prev, view, data.prev.until - data.prev.since)}</p>}
         {data && (
           <div className="flex max-w-[80ch] flex-col gap-1 text-[13px] text-muted-foreground">
             <p>List prices as of {data.prices.checked}, global routing, standard speed. A Claude subscription is not billed per token.</p>
@@ -354,6 +359,34 @@ function Statement({ data, view, onDays }: { data: Summary; view: View; onDays: 
       <span className={fig} data-kpi="cost">{usd(k.cost)}</span> at list price.{' '}
       {cacheShare(k) != null && <><span className={fig}>{Math.round(cacheShare(k)! * 100)}%</span> of the prompt came from cache.</>}
     </p>
+  )
+}
+
+const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+// What is happening now, whatever the filters below: the estimated 5-hour
+// usage window, the sessions working in the last ten minutes, the last
+// request and today so far.
+function NowStrip({ now, at }: { now: Now; at: number }) {
+  const w = now.window
+  const item = (label: string, value: React.ReactNode, detail: React.ReactNode, key: string) => (
+    <div className="flex min-w-0 flex-col gap-0.5" data-now={key}>
+      <span className="text-[13px] text-muted-foreground">{label}</span>
+      <span className="truncate font-semibold">{value}</span>
+      <span className="text-[13px] text-pretty break-words text-muted-foreground">{detail}</span>
+    </div>
+  )
+  return (
+    <section aria-label="Right now, across every machine whatever the filters" className="mt-6 grid gap-x-8 gap-y-4 border-y border-border py-4 sm:grid-cols-2 xl:grid-cols-4">
+      {item('This 5-hour window (estimated from the log)',
+        w ? <>{usd(w.cost)} for {plural(w.requests, 'request')}, {plural(w.prompts, 'prompt')}</> : 'No window open',
+        w ? `Opened ${clock(w.start)}; runs out at ${clock(w.resets)}, in ${span(w.resets - at)}` : 'One opens with your next request', 'window')}
+      {item('Working now', now.active.length ? plural(now.active.length, 'session') : 'Nothing running',
+        now.active.length ? now.active.map(x => sessionName(x.title, x.id)).join(', ') : 'No request in the last 10 minutes', 'active')}
+      {item('Last request', now.last ? `${span(Math.max(0, at - now.last.at))} ago` : 'None yet',
+        now.last ? `${now.last.model} in ${sessionName(now.last.title, now.last.session)}${now.last.machine ? `, on ${now.last.machine}` : ''}` : 'Nothing logged yet', 'last')}
+      {item('Today so far', usd(now.today.cost), plural(now.today.requests, 'request'), 'today')}
+    </section>
   )
 }
 

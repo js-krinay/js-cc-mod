@@ -1,6 +1,6 @@
 {
   "name": "request-log",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Logs every model request (any model, effort, subagent) as one JSON line in ~/.claude/request-log/<date>.jsonl, with a dashboard of tokens, cost, sessions and cache hit rate",
   "author": {
     "name": "js-krinay"

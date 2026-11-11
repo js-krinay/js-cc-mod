@@ -6,6 +6,8 @@ Each line holds the time, duration and time to first token; the machine, user, f
 
 Lines go to `~/.claude/request-log/<UTC date>.jsonl` (under `CLAUDE_CONFIG_DIR` when that is set), one file per day, shared by every session on the machine. Nothing is sent anywhere.
 
+Runs on macOS and Linux. The logger needs only what those systems ship with (`sh`, `perl`, `git`, `hostname`); the dashboard needs [Bun](https://bun.sh).
+
 ## Install the logger
 
 At the prompt of a terminal session:
@@ -26,7 +28,15 @@ New sessions log from then on.
 
 ## Run the dashboard
 
-The dashboard needs [Bun](https://bun.sh). Clone this repository, then:
+To try it, clone this repository and run it in the foreground:
+
+```
+cd dashboard && bun install && bun run start
+```
+
+Then open http://127.0.0.1:8787/. It reads the log as it grows, and stops with the terminal.
+
+To keep it running, install it as a service instead:
 
 ```
 dashboard/install.sh
@@ -39,7 +49,7 @@ It runs the dashboard as a service on this machine (a launchd agent on macOS, a 
 
 `--port` and `--ts-port` change the two ports. Rerunning the script replaces the service in place; `dashboard/install.sh --uninstall` removes it.
 
-The page shows totals for the period, requests and cost per day by model, cost by token type, an hour-by-weekday heatmap, each subagent type's share, a timeline of recent sessions, cache hit rate per session, and sortable, paged tables, all under one set of filters kept in the URL.
+The page opens with what is happening now: an estimate of your current 5-hour usage window (worked out from the log alone; Claude's own accounting is not visible to it), the sessions working in the last ten minutes, the last request and today's cost. Below that it shows totals for the period against the period before, requests and cost per day by model, cost by token type, an hour-by-weekday heatmap, each subagent type's share, a timeline of recent sessions, cache hit rate per session, and sortable, paged tables, all under one set of filters kept in the URL.
 
 Cost is what the tokens would cost at Claude API list prices, from `dashboard/prices.json`. A Claude subscription is not billed per token. Update that file when prices change; the dashboard reloads it every five minutes.
 

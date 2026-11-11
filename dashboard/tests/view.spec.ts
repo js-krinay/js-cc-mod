@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { bucketLabel, chartRows, fmt, ms, readHash, sessionName, seriesColor, TOP_SERIES, usd, windowOf, writeHash } from '../src/lib/view'
+import { bucketLabel, chartRows, comparison, fmt, ms, readHash, sessionName, seriesColor, TOP_SERIES, usd, windowOf, writeHash } from '../src/lib/view'
 
 test('the view round-trips through the URL hash and ignores junk', () => {
   const v = readHash('#machine=server&model=claude-opus-5-5&days=30&ttl=5m&metric=cost&q=trace&from=2026-11-01')
@@ -80,4 +80,14 @@ test('a session without a title is named by the start of its id', () => {
   expect(sessionName('Fix the cart', 'f5efec30-fbe2-4136-a3dc-b591b47bd593')).toBe('Fix the cart')
   expect(sessionName(null, 'f5efec30-fbe2-4136-a3dc-b591b47bd593')).toBe('Untitled session f5efec30')
   expect(sessionName(null, null)).toBe('Untitled session')
+})
+
+test('the comparison names the period before and says how cost and requests moved', () => {
+  const k = (cost: number, requests: number) => ({ cost, requests })
+  expect(comparison(k(13, 152), k(10, 100), { days: 14 })).toBe('Compared with the 14 days before, cost is up 30% and requests are up 52%.')
+  expect(comparison(k(9, 99), k(10, 100), { days: 1 })).toBe('Compared with yesterday by this time, cost is down 10% and requests are about the same.')
+  expect(comparison(k(5, 3), k(0, 0), { days: 7 })).toBe('Nothing was logged in the 7 days before.')
+  expect(comparison(k(123, 30), k(10, 10), { days: 14 })).toBe('Compared with the 14 days before, cost is up 12-fold and requests are up 3-fold.')
+  expect(comparison(k(5, 3), k(5, 3), { days: 30, from: '2026-11-01', to: '2026-11-03' }, 3 * 864e5)).toBe(
+    'Compared with the 3 days before, cost and requests are about the same.')
 })

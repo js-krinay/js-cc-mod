@@ -151,3 +151,24 @@ export const metricFormat = (m: Metric) => (m === 'cost' ? usd : fmt)
 // start of its id, which is enough to tell it apart.
 export const sessionName = (title: string | null | undefined, id: string | null | undefined) =>
   title || (id ? `Untitled session ${id.slice(0, 8)}` : 'Untitled session')
+
+const move = (now: number, before: number) => {
+  const d = before > 0 ? (now - before) / before : 0
+  if (Math.abs(d) < 0.02) return 'about the same'
+  // Past three times, a percentage stops reading well: say how many times.
+  if (d >= 2) return `up ${Math.round(now / before)}-fold`
+  return `${d > 0 ? 'up' : 'down'} ${Math.round(Math.abs(d) * 100)}%`
+}
+
+// One sentence on how this period compares with the one of the same length
+// just before it. `lengthMs` names a custom date range by its length.
+export function comparison(now: { cost: number; requests: number }, before: { cost: number; requests: number },
+  v: Pick<View, 'days' | 'from' | 'to'>, lengthMs?: number) {
+  const days = v.from || v.to ? Math.max(1, Math.round((lengthMs ?? 864e5) / 864e5)) : v.days
+  const label = !(v.from || v.to) && days === 1 ? 'yesterday by this time' : `the ${days === 1 ? 'day' : `${days} days`} before`
+  if (before.requests === 0) return `Nothing was logged in ${label}.`
+  const cost = move(now.cost, before.cost), requests = move(now.requests, before.requests)
+  return cost === 'about the same' && requests === 'about the same'
+    ? `Compared with ${label}, cost and requests are about the same.`
+    : `Compared with ${label}, cost is ${cost} and requests are ${requests}.`
+}
