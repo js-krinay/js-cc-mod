@@ -110,7 +110,22 @@ test('a main-thread request is one line with its session, machine, model, effort
 test('a subagent request carries its agent id, type and description', async ($, on) => {
   const lines = host(on)
   on('agent.list', () => ({
-    value: [{ id: 'a1', type: 'sonnet-worker', description: 'Implement the badge', status: 'running' }],
+    value: [
+      {
+        id: 'a1',
+        type: 'sonnet-worker',
+        description: 'Implement the badge',
+        status: 'running',
+        kind: 'local_agent',
+        taskStatus: 'running',
+        label: 'Implement the badge',
+        startTime: 0,
+        cwd: '/work/project',
+        tokenCount: 0,
+        tokenSamples: [],
+        hasRow: true,
+      },
+    ],
   }))
   on('turn.step', async function* () {
     return answer({ usage: { ...answer().usage!, model: 'claude-sonnet-5-5' } })
